@@ -2,7 +2,7 @@
 /**
  * Transport and argument validation.
  *
- * @package   SugarMill\Mcp
+ * @package   Sugar\Mcp
  * @copyright Copyright (c) 2026, ArrayPress Limited
  * @license   GPL-2.0-or-later
  * @since     1.0.0
@@ -10,19 +10,19 @@
 
 declare( strict_types=1 );
 
-namespace SugarMill\Mcp\Tests;
+namespace Sugar\Mcp\Tests;
 
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
-use SugarMill\Mcp\Http;
-use SugarMill\Mcp\Implementation;
-use SugarMill\Mcp\Protocol;
-use SugarMill\Mcp\Schema;
-use SugarMill\Mcp\Server;
-use SugarMill\Mcp\Tool;
-use SugarMill\Mcp\ToolResult;
+use Sugar\Mcp\Http;
+use Sugar\Mcp\Implementation;
+use Sugar\Mcp\Protocol;
+use Sugar\Mcp\Schema;
+use Sugar\Mcp\Server;
+use Sugar\Mcp\Tool;
+use Sugar\Mcp\ToolResult;
 
 #[CoversClass( Http::class )]
 #[CoversClass( Schema::class )]
@@ -49,7 +49,7 @@ final class HttpTest extends TestCase {
 	/**
 	 * @param array<string, mixed> $extra
 	 */
-	private function post( string $body, array $extra = array() ): \SugarMill\Mcp\Response {
+	private function post( string $body, array $extra = array() ): \Sugar\Mcp\Response {
 		return $this->http()->respond(
 			array_merge(
 				array( 'REQUEST_METHOD' => 'POST', 'HTTP_AUTHORIZATION' => 'Bearer admin-token' ),

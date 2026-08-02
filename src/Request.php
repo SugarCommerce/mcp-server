@@ -2,7 +2,7 @@
 /**
  * A parsed JSON-RPC request.
  *
- * @package   SugarMill\Mcp
+ * @package   Sugar\Mcp
  * @copyright Copyright (c) 2026, ArrayPress Limited
  * @license   GPL-2.0-or-later
  * @since     1.0.0
@@ -10,7 +10,7 @@
 
 declare( strict_types=1 );
 
-namespace SugarMill\Mcp;
+namespace Sugar\Mcp;
 
 /**
  * Class Request

@@ -15,13 +15,13 @@ PHP 8.5+, `ext-json`
 ## Installation
 
 ```bash
-composer require sugarmill/mcp-server
+composer require sugarcommerce/mcp-server
 ```
 
 ## Usage
 
 ```php
-use SugarMill\Mcp\{Http, Implementation, Server, Tool, ToolResult};
+use Sugar\Mcp\{Http, Implementation, Server, Tool, ToolResult};
 
 $server = new Server(
     new Implementation( 'my-shop', '1.0.0' ),
@@ -170,7 +170,7 @@ Tools are what an application server has to offer, and they are the whole of wha
 
 ## Security
 
-See [SECURITY.md](SECURITY.md). The specification asks servers to validate inputs, enforce access control, rate limit, and sanitise outputs; the first two are handled here, and the last two are yours — pair this with [`sugarmill/rate-limit`](https://github.com/sugarmill/rate-limit) in front of `serve()`.
+See [SECURITY.md](SECURITY.md). The specification asks servers to validate inputs, enforce access control, rate limit, and sanitise outputs; the first two are handled here, and the last two are yours — pair this with [`sugarcommerce/rate-limit`](https://github.com/sugarcommerce/rate-limit) in front of `serve()`.
 
 Note that tool **annotations are untrusted** from the client's point of view: `readOnlyHint` is a hint for a confirmation UI, never an enforcement mechanism. Enforce in the handler.
 
