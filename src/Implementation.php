@@ -2,7 +2,7 @@
 /**
  * A name and version pair identifying a client or server.
  *
- * @package   Sugar\Mcp
+ * @package   SugarCommerce\Mcp
  * @copyright Copyright (c) 2026, ArrayPress Limited
  * @license   GPL-2.0-or-later
  * @since     1.0.0
@@ -10,7 +10,7 @@
 
 declare( strict_types=1 );
 
-namespace Sugar\Mcp;
+namespace SugarCommerce\Mcp;
 
 /**
  * Class Implementation

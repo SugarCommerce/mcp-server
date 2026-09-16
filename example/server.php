@@ -4,14 +4,14 @@
  *
  * php -S 127.0.0.1:8848 example/server.php
  *
- * @package Sugar\Mcp
+ * @package SugarCommerce\Mcp
  */
 
 declare( strict_types=1 );
 
 require __DIR__ . '/../vendor/autoload.php';
 
-use Sugar\Mcp\{Authenticator, Http, Identity, Implementation, Server, Tool, ToolResult};
+use SugarCommerce\Mcp\{Authenticator, Http, Identity, Implementation, Server, Tool, ToolResult};
 
 /** A toy authenticator. A real one looks tokens up and uses hash_equals. */
 final readonly class DemoTokens implements Authenticator {

@@ -21,7 +21,7 @@ composer require sugarcommerce/mcp-server
 ## Usage
 
 ```php
-use Sugar\Mcp\{Http, Implementation, Server, Tool, ToolResult};
+use SugarCommerce\Mcp\{Http, Implementation, Server, Tool, ToolResult};
 
 $server = new Server(
     new Implementation( 'my-shop', '1.0.0' ),

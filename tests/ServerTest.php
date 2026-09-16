@@ -2,7 +2,7 @@
 /**
  * Protocol dispatch.
  *
- * @package   Sugar\Mcp
+ * @package   SugarCommerce\Mcp
  * @copyright Copyright (c) 2026, ArrayPress Limited
  * @license   GPL-2.0-or-later
  * @since     1.0.0
@@ -10,21 +10,21 @@
 
 declare( strict_types=1 );
 
-namespace Sugar\Mcp\Tests;
+namespace SugarCommerce\Mcp\Tests;
 
 use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
-use Sugar\Mcp\Content;
-use Sugar\Mcp\Identity;
-use Sugar\Mcp\Implementation;
-use Sugar\Mcp\Protocol;
-use Sugar\Mcp\Request;
-use Sugar\Mcp\Response;
-use Sugar\Mcp\Server;
-use Sugar\Mcp\Tool;
-use Sugar\Mcp\ToolResult;
+use SugarCommerce\Mcp\Content;
+use SugarCommerce\Mcp\Identity;
+use SugarCommerce\Mcp\Implementation;
+use SugarCommerce\Mcp\Protocol;
+use SugarCommerce\Mcp\Request;
+use SugarCommerce\Mcp\Response;
+use SugarCommerce\Mcp\Server;
+use SugarCommerce\Mcp\Tool;
+use SugarCommerce\Mcp\ToolResult;
 
 #[CoversClass( Server::class )]
 #[CoversClass( Request::class )]

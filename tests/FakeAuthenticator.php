@@ -2,7 +2,7 @@
 /**
  * A token table for the tests.
  *
- * @package   Sugar\Mcp
+ * @package   SugarCommerce\Mcp
  * @copyright Copyright (c) 2026, ArrayPress Limited
  * @license   GPL-2.0-or-later
  * @since     1.0.0
@@ -10,10 +10,10 @@
 
 declare( strict_types=1 );
 
-namespace Sugar\Mcp\Tests;
+namespace SugarCommerce\Mcp\Tests;
 
-use Sugar\Mcp\Authenticator;
-use Sugar\Mcp\Identity;
+use SugarCommerce\Mcp\Authenticator;
+use SugarCommerce\Mcp\Identity;
 
 /**
  * Class FakeAuthenticator
