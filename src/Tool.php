@@ -89,10 +89,19 @@ final readonly class Tool {
 	 * @return array<string, mixed>
 	 */
 	public function definition(): array {
+		$schema = $this->input_schema;
+
+		// An empty PHP array encodes as `[]`, which is not a schema object,
+		// and a client that validates tools/list refuses the whole list over
+		// one tool that takes no arguments.
+		if ( array() === ( $schema['properties'] ?? null ) ) {
+			$schema['properties'] = new \stdClass();
+		}
+
 		$definition = array(
 			'name'        => $this->name,
 			'description' => $this->description,
-			'inputSchema' => $this->input_schema,
+			'inputSchema' => $schema,
 		);
 
 		if ( '' !== $this->title ) {

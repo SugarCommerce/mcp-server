@@ -500,4 +500,18 @@ final class ServerTest extends TestCase {
 		$this->assertSame( 'audio/wav', Content::audio( 'bytes' )['mimeType'] );
 		$this->assertSame( 'resource_link', Content::resource_link( 'file:///a', 'a' )['type'] );
 	}
+
+	/**
+	 * `"properties": []` is not a JSON Schema object; `{}` is.
+	 */
+	public function test_a_tool_with_no_arguments_lists_an_object_of_properties(): void {
+		$tool = new \SugarCommerce\Mcp\Tool(
+			name: 'ping',
+			description: 'Ping.',
+			input_schema: array( 'type' => 'object', 'properties' => array() ),
+			handler: static fn (): \SugarCommerce\Mcp\ToolResult => \SugarCommerce\Mcp\ToolResult::text( 'pong' ),
+		);
+
+		$this->assertSame( '{"type":"object","properties":{}}', json_encode( $tool->definition()['inputSchema'] ) );
+	}
 }
