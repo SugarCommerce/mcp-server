@@ -25,6 +25,7 @@ final readonly class FakeAuthenticator implements Authenticator {
 	/**
 	 * {@inheritDoc}
 	 */
+	#[\Override]
 	public function authenticate( #[\SensitiveParameter] string $token ): ?Identity {
 		// Constant-time even in a fixture, because it is the thing people
 		// copy out of a test into production.

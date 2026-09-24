@@ -32,7 +32,7 @@ final readonly class Http {
 	 * attempt to exhaust memory, and either way there is nothing useful
 	 * to parse.
 	 */
-	private const MAX_BODY = 1048576;
+	private const int MAX_BODY = 1048576;
 
 	/**
 	 * @since 1.0.0
