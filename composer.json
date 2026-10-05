@@ -1,6 +1,6 @@
 {
   "name": "sugarcommerce/mcp-server",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "A Model Context Protocol server for plain PHP. Implements the 2026-07-28 revision: stateless per-request negotiation, JSON-RPC 2.0 over Streamable HTTP, typed tools with JSON Schema validation, and scope-based authorization. Zero dependencies.",
   "type": "library",
   "license": "GPL-2.0-or-later",

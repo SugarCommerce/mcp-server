@@ -80,6 +80,44 @@ Unknown tools and malformed requests are protocol errors, and the library raises
 
 A handler that throws is caught and reported as a **generic** failure. An exception message can carry a DSN, a query or a credential, and this response goes to a language model and often into a transcript, so it is never passed through.
 
+## Results for clients that read only text
+
+Many clients ignore `structuredContent` and show the model only the text block. `ToolResult::structured()` puts the JSON there; for results that can be long, `summarised()` puts a heading and the JSON there, capped, and says so when it cuts:
+
+```php
+return ToolResult::summarised( $orders, 'list_orders: done.' );          // 12,000 characters
+return ToolResult::summarised( $orders, 'list_orders: done.', 4000 );
+```
+
+```text
+list_orders: done.
+{"orders":[{"id":1,…
+… truncated: 4000 of 51234 characters shown. The full result is in structuredContent; narrow the call (a search, a filter, a smaller page) to see the rest as text.
+```
+
+It cuts by character, never through a multibyte one, without needing mbstring. `ToolResult::summary()` returns just the text.
+
+## Argument schemas
+
+```php
+use SugarCommerce\Mcp\Schema;
+
+input_schema: Schema::object( [ 'id' => [ 'type' => 'integer' ] ], [ 'id' ] ),
+```
+
+Closed by default (`additionalProperties: false`), so a misspelt argument is a retryable error naming it rather than silently ignored. Pass `open: true` to allow others.
+
+## Sending the reply yourself
+
+`Http::serve()` writes the reply. An application with its own response object can build the reply with `respond()` and take the headers from `Http::headers()`, so the two cannot drift:
+
+```php
+$reply   = ( new Http( $server ) )->respond( $server_vars, $body );
+$headers = Http::headers( $reply, realm: 'my-shop', token_sent: '' !== $token );
+```
+
+Every reply is `application/json`, `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. A 401 carries the RFC 6750 challenge: `Bearer realm="my-shop"` when no token was sent, plus `error="invalid_token"` when one was — clients use the difference to decide between asking for a token and reporting the one they have as wrong.
+
 ## Authorization
 
 Implement `Authenticator` — where tokens live and what a scope means are your decisions:
@@ -181,7 +219,7 @@ composer install
 composer test
 ```
 
-77 tests — every protocol guard, both error mechanisms, scope filtering and the enumeration defence, exception redaction, the schema validator, and one request over a real socket against the demo server.
+87 tests — every protocol guard, both error mechanisms, scope filtering and the enumeration defence, exception redaction, the schema validator and closed object schemas, capped text summaries with multibyte characters, the reply headers and the 401 challenge, and one request over a real socket against the demo server.
 
 ## Try it
 

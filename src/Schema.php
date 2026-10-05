@@ -35,6 +35,34 @@ namespace SugarCommerce\Mcp;
 final readonly class Schema {
 
 	/**
+	 * An object schema for a tool's arguments.
+	 *
+	 * Closed by default: with `additionalProperties` left out, a model that
+	 * misspells an argument has it silently ignored and the call does
+	 * something other than what it meant. Closed, the typo is a retryable
+	 * error naming the property.
+	 *
+	 * An empty property list is still an object, which is what a client
+	 * expects of a tool that takes nothing.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param array<string, array<string, mixed>> $properties Argument schemas, by name.
+	 * @param string[]                            $required   Names that must be given.
+	 * @param bool                                $open       Whether other names are allowed.
+	 *
+	 * @return array<string, mixed>
+	 */
+	public static function object( array $properties, array $required = array(), bool $open = false ): array {
+		return array(
+			'type'                 => 'object',
+			'properties'           => $properties,
+			'required'             => array_values( $required ),
+			'additionalProperties' => $open,
+		);
+	}
+
+	/**
 	 * Check a value against a schema.
 	 *
 	 * @since 1.0.0

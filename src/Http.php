@@ -38,8 +38,49 @@ final readonly class Http {
 	 * @since 1.0.0
 	 *
 	 * @param Server $server Server to dispatch to.
+	 * @param string $realm  Named in the challenge on a 401. Since 1.1.0.
 	 */
-	public function __construct( private Server $server ) {}
+	public function __construct( private Server $server, private string $realm = 'mcp' ) {}
+
+	/**
+	 * The headers a reply goes out with.
+	 *
+	 * For an application that sends the reply through its own response
+	 * object rather than {@see self::serve()}, so the two cannot differ:
+	 *
+	 * - `Cache-Control: no-store` — tool results are live data, and an
+	 *   intermediary must never cache one.
+	 * - `X-Content-Type-Options: nosniff` — the body is JSON that can carry
+	 *   text a model or a user wrote; a browser must not guess it is HTML.
+	 * - `WWW-Authenticate` on a 401, as RFC 6750 writes it. HTTP requires a
+	 *   challenge on every 401, and MCP clients read it to decide between
+	 *   "ask for a token" and "the token you have is wrong" — without it
+	 *   some retry the same rejected token, or give up without asking.
+	 *   `invalid_token` only when one was sent: a request that sent none is
+	 *   told what to send, not that it sent something bad.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param Response $response   The reply.
+	 * @param string   $realm      The protection space, e.g. your app's name.
+	 * @param bool     $token_sent Whether the request carried a bearer token.
+	 *
+	 * @return array<string, string>
+	 */
+	public static function headers( Response $response, string $realm = 'mcp', bool $token_sent = false ): array {
+		$headers = array(
+			'Content-Type'           => 'application/json',
+			'Cache-Control'          => 'no-store',
+			'X-Content-Type-Options' => 'nosniff',
+		);
+
+		if ( 401 === $response->status ) {
+			$headers['WWW-Authenticate'] = 'Bearer realm="' . str_replace( array( '"', '\\', "\r", "\n" ), '', $realm ) . '"'
+				. ( $token_sent ? ', error="invalid_token", error_description="The token is not valid, or has been revoked."' : '' );
+		}
+
+		return $headers;
+	}
 
 	/**
 	 * Serve the current request and send the reply.
@@ -52,13 +93,14 @@ final readonly class Http {
 	 * @return void
 	 */
 	public function serve( ?array $server_vars = null, ?string $body = null ): void {
-		$response = $this->respond( $server_vars ?? $_SERVER, $body ?? $this->read_body() );
+		$server_vars = $server_vars ?? $_SERVER;
+		$response    = $this->respond( $server_vars, $body ?? $this->read_body() );
 
 		http_response_code( $response->status );
-		header( 'Content-Type: application/json' );
-		// Tool results reflect live data and must never be cached by an
-		// intermediary between the client and the server.
-		header( 'Cache-Control: no-store' );
+
+		foreach ( self::headers( $response, $this->realm, '' !== $this->bearer( $server_vars ) ) as $name => $value ) {
+			header( $name . ': ' . $value );
+		}
 
 		if ( null !== $response->body ) {
 			echo $response->json();

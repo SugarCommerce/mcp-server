@@ -152,6 +152,33 @@ final class HttpTest extends TestCase {
 		$this->assertSame( Protocol::HEADER_MISMATCH, $response->body['error']['code'] );
 	}
 
+	/* ─── Reply headers ─────────────────────────────────────────────── */
+
+	public function test_every_reply_is_json_uncached_and_unsniffed(): void {
+		$headers = Http::headers( $this->post( $this->envelope( 'ping' ) ) );
+
+		$this->assertSame( array(
+			'Content-Type'           => 'application/json',
+			'Cache-Control'          => 'no-store',
+			'X-Content-Type-Options' => 'nosniff',
+		), $headers );
+	}
+
+	/**
+	 * RFC 6750: a request with no token is told what to send; one with a
+	 * bad token is told it is invalid.
+	 */
+	public function test_a_401_carries_a_bearer_challenge(): void {
+		$unauthorised = $this->http()->respond( array( 'REQUEST_METHOD' => 'POST' ), $this->envelope( 'tools/list' ) );
+
+		$this->assertSame( 'Bearer realm="my-shop"', Http::headers( $unauthorised, 'my-shop' )['WWW-Authenticate'] );
+		$this->assertSame(
+			'Bearer realm="my-shop", error="invalid_token", error_description="The token is not valid, or has been revoked."',
+			Http::headers( $unauthorised, 'my-shop', token_sent: true )['WWW-Authenticate']
+		);
+		$this->assertSame( 'Bearer realm="evil"', Http::headers( $unauthorised, "ev\"i\r\nl" )['WWW-Authenticate'], 'Nothing breaks out of the quotes.' );
+	}
+
 	/* ─── Batches ───────────────────────────────────────────────────── */
 
 	public function test_a_batch_returns_one_reply_per_request(): void {
@@ -270,6 +297,14 @@ final class HttpTest extends TestCase {
 		$problems = Schema::validate( array( 'user' => array( 'age' => 'old' ) ), $schema );
 
 		$this->assertStringContainsString( 'user.age', $problems[0] );
+	}
+
+	public function test_an_object_schema_is_closed_by_default(): void {
+		$schema = Schema::object( array( 'id' => array( 'type' => 'integer' ) ), array( 'id' ) );
+
+		$this->assertSame( array( 'type' => 'object', 'properties' => array( 'id' => array( 'type' => 'integer' ) ), 'required' => array( 'id' ), 'additionalProperties' => false ), $schema );
+		$this->assertNotSame( array(), Schema::validate( array( 'id' => 1, 'idd' => 2 ), $schema ), 'A misspelt argument is an error, not ignored.' );
+		$this->assertSame( array(), Schema::validate( array( 'id' => 1, 'x' => 2 ), Schema::object( array( 'id' => array( 'type' => 'integer' ) ), open: true ) ) );
 	}
 
 	/**
