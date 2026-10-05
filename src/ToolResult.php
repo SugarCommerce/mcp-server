@@ -33,6 +33,16 @@ namespace SugarCommerce\Mcp;
 final readonly class ToolResult {
 
 	/**
+	 * Most characters of JSON a summarised text block carries by default.
+	 *
+	 * Twelve thousand: a detailed record with its children fits, and a page
+	 * of fifty rows mostly does.
+	 *
+	 * @since 1.1.0
+	 */
+	public const int SUMMARY_LIMIT = 12000;
+
+	/**
 	 * @since 1.0.0
 	 *
 	 * @param array<int, array<string, mixed>> $content    Content blocks.
@@ -78,6 +88,89 @@ final readonly class ToolResult {
 		$encoded = (string) json_encode( $data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
 
 		return new self( array( Content::text( '' !== $summary ? $summary : $encoded ) ), $data );
+	}
+
+	/**
+	 * A structured result whose text block is a heading and the JSON, capped.
+	 *
+	 * Many clients read only the text block. A text block that says "done"
+	 * and nothing else tells such a client's model the call worked and gives
+	 * it nothing to work with; one that is the whole of a two-hundred-row
+	 * page spends a large share of its context on a list it will mostly not
+	 * read. So the text is the JSON after a one-line heading, cut at a
+	 * character limit — by character, never through a multibyte one — and
+	 * past the limit it says so, and where the rest is, rather than ending
+	 * mid-string as though that were the whole answer.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param mixed  $data    Any JSON-serialisable value.
+	 * @param string $heading First line of the text block, e.g. "list_files: done.".
+	 * @param int    $limit   Characters of JSON the text block carries.
+	 *
+	 * @return self
+	 */
+	public static function summarised( mixed $data, string $heading, int $limit = self::SUMMARY_LIMIT ): self {
+		return new self( array( Content::text( self::summary( $data, $heading, $limit ) ) ), $data );
+	}
+
+	/**
+	 * The text block summarised() writes.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param mixed  $data    Any JSON-serialisable value.
+	 * @param string $heading First line.
+	 * @param int    $limit   Characters of JSON to keep.
+	 *
+	 * @return string
+	 */
+	public static function summary( mixed $data, string $heading, int $limit = self::SUMMARY_LIMIT ): string {
+		$json = (string) json_encode( $data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION );
+
+		// Characters, not bytes: every byte that is not a UTF-8 continuation
+		// byte starts one. json_encode() only ever writes valid UTF-8.
+		$length = strlen( $json ) - (int) preg_match_all( '/[\x80-\xBF]/', $json );
+		$limit  = max( 0, $limit );
+
+		if ( $length <= $limit ) {
+			return $heading . "\n" . $json;
+		}
+
+		return sprintf(
+			"%s\n%s\n… truncated: %d of %d characters shown. The full result is in structuredContent; narrow the call (a search, a filter, a smaller page) to see the rest as text.",
+			$heading,
+			self::first_characters( $json, $limit ),
+			$limit,
+			$length
+		);
+	}
+
+	/**
+	 * The first characters of a UTF-8 string, never cutting through one.
+	 *
+	 * Without mbstring, which this package does not require.
+	 *
+	 * @param string $text  Valid UTF-8.
+	 * @param int    $count Characters to keep.
+	 *
+	 * @return string
+	 */
+	private static function first_characters( string $text, int $count ): string {
+		$bytes = 0;
+		$size  = strlen( $text );
+
+		for ( $kept = 0; $kept < $count && $bytes < $size; ++$kept ) {
+			$lead   = ord( $text[ $bytes ] );
+			$bytes += match ( true ) {
+				$lead < 0x80 => 1,
+				$lead < 0xE0 => 2,
+				$lead < 0xF0 => 3,
+				default      => 4,
+			};
+		}
+
+		return substr( $text, 0, $bytes );
 	}
 
 	/**
