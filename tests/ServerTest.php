@@ -514,4 +514,18 @@ final class ServerTest extends TestCase {
 
 		$this->assertSame( '{"type":"object","properties":{}}', json_encode( $tool->definition()['inputSchema'] ) );
 	}
+	/* ─── Step-up ───────────────────────────────────────────────────── */
+
+	public function test_missing_scopes_names_what_a_call_needs(): void {
+		$server = $this->server();
+		$reader = new Identity( 'reader', array( 'read' ) );
+
+		$this->assertSame( array( 'write' ), $server->missing_scopes( $this->message( 'tools/call', array( 'name' => 'destroy' ) ), $reader ) );
+		$this->assertSame( array( 'write' ), $server->missing_scopes( $this->message( 'tools/call', array( 'name' => 'destroy' ) ), null ) );
+		$this->assertSame( array(), $server->missing_scopes( $this->message( 'tools/call', array( 'name' => 'echo' ) ), $reader ) );
+		$this->assertSame( array(), $server->missing_scopes( $this->message( 'tools/call', array( 'name' => 'nope' ) ), $reader ) );
+		$this->assertSame( array(), $server->missing_scopes( $this->message( 'tools/call', array( 'name' => array( 'destroy' ) ) ), $reader ) );
+		$this->assertSame( array(), $server->missing_scopes( $this->message( 'tools/list' ), $reader ) );
+		$this->assertSame( array(), $server->missing_scopes( $this->message( 'tools/call', array( 'name' => 'destroy' ) ), new Identity( 'admin', array( '*' ) ) ) );
+	}
 }

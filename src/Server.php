@@ -113,6 +113,40 @@ final class Server {
 		return $this->tools;
 	}
 
+	/**
+	 * The scopes a caller lacks for the tool a message calls.
+	 *
+	 * For a resource server that answers a call it cannot make with the
+	 * MCP step-up challenge — 403 and `insufficient_scope` — rather than the
+	 * tool-not-found error handle() gives. handle() never reveals that a
+	 * hidden tool exists, which is right for tools whose names are private;
+	 * an application whose tool list is public (documented, say) can
+	 * challenge for the scopes it knows a client may be granted, and must
+	 * not for any other.
+	 *
+	 * @since 1.2.0
+	 *
+	 * @param array<string, mixed> $message  Decoded JSON-RPC message.
+	 * @param Identity|null        $identity The caller.
+	 *
+	 * @return string[] Empty when the message is not a `tools/call`, names
+	 *                  no registered tool, or the caller holds every scope.
+	 */
+	public function missing_scopes( array $message, ?Identity $identity ): array {
+		if ( 'tools/call' !== ( $message['method'] ?? null ) ) {
+			return array();
+		}
+
+		$name = $message['params']['name'] ?? null;
+		$tool = is_string( $name ) ? $this->tools[ $name ] ?? null : null;
+
+		if ( null === $tool || $tool->permits( $identity ) ) {
+			return array();
+		}
+
+		return array_values( array_filter( $tool->scopes, static fn ( string $scope ): bool => null === $identity || ! $identity->has( $scope ) ) );
+	}
+
 	/* ─── Dispatch ──────────────────────────────────────────────────── */
 
 	/**

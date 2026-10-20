@@ -39,8 +39,10 @@ final readonly class Http {
 	 *
 	 * @param Server $server Server to dispatch to.
 	 * @param string $realm  Named in the challenge on a 401. Since 1.1.0.
+	 * @param string $resource_metadata The RFC 9728 metadata URL for the
+	 *                          challenge, or ''. Since 1.2.0.
 	 */
-	public function __construct( private Server $server, private string $realm = 'mcp' ) {}
+	public function __construct( private Server $server, private string $realm = 'mcp', private string $resource_metadata = '' ) {}
 
 	/**
 	 * The headers a reply goes out with.
@@ -52,22 +54,24 @@ final readonly class Http {
 	 *   intermediary must never cache one.
 	 * - `X-Content-Type-Options: nosniff` — the body is JSON that can carry
 	 *   text a model or a user wrote; a browser must not guess it is HTML.
-	 * - `WWW-Authenticate` on a 401, as RFC 6750 writes it. HTTP requires a
-	 *   challenge on every 401, and MCP clients read it to decide between
-	 *   "ask for a token" and "the token you have is wrong" — without it
-	 *   some retry the same rejected token, or give up without asking.
-	 *   `invalid_token` only when one was sent: a request that sent none is
-	 *   told what to send, not that it sent something bad.
+	 * - `WWW-Authenticate` on a 401 and a 403 — see {@see self::challenge()}.
 	 *
 	 * @since 1.1.0
+	 * @since 1.2.0 `$resource_metadata` and `$scope`, and the 403 challenge.
 	 *
-	 * @param Response $response   The reply.
-	 * @param string   $realm      The protection space, e.g. your app's name.
-	 * @param bool     $token_sent Whether the request carried a bearer token.
+	 * @param Response $response          The reply.
+	 * @param string   $realm             The protection space, e.g. your app's name.
+	 * @param bool     $token_sent        Whether the request carried a bearer token.
+	 * @param string   $resource_metadata The RFC 9728 protected resource
+	 *                                    metadata URL, or '' when the server
+	 *                                    has no OAuth authorization server.
+	 * @param string   $scope             Space-separated scopes the request
+	 *                                    needs: on a 401, what to ask for; on
+	 *                                    a 403, what was missing.
 	 *
 	 * @return array<string, string>
 	 */
-	public static function headers( Response $response, string $realm = 'mcp', bool $token_sent = false ): array {
+	public static function headers( Response $response, string $realm = 'mcp', bool $token_sent = false, string $resource_metadata = '', string $scope = '' ): array {
 		$headers = array(
 			'Content-Type'           => 'application/json',
 			'Cache-Control'          => 'no-store',
@@ -75,11 +79,69 @@ final readonly class Http {
 		);
 
 		if ( 401 === $response->status ) {
-			$headers['WWW-Authenticate'] = 'Bearer realm="' . str_replace( array( '"', '\\', "\r", "\n" ), '', $realm ) . '"'
-				. ( $token_sent ? ', error="invalid_token", error_description="The token is not valid, or has been revoked."' : '' );
+			$headers['WWW-Authenticate'] = self::challenge( $realm, $token_sent ? 'invalid_token' : '', $resource_metadata, $scope );
+		}
+
+		if ( 403 === $response->status ) {
+			$headers['WWW-Authenticate'] = self::challenge( $realm, 'insufficient_scope', $resource_metadata, $scope );
 		}
 
 		return $headers;
+	}
+
+	/**
+	 * A Bearer challenge (RFC 6750 §3), with the RFC 9728 pointer.
+	 *
+	 * HTTP requires a challenge on every 401, and MCP clients read it:
+	 *
+	 * - No `error` when no token was sent: the client is told what to send,
+	 *   not that it sent something bad. `invalid_token` when one was — clients
+	 *   use the difference to decide between asking for a token and
+	 *   reporting the one they have as wrong.
+	 * - `resource_metadata` is how an MCP client finds the authorization
+	 *   server (MCP 2026-07-28, "Protected Resource Metadata Discovery");
+	 *   Claude starts its sign-in only on a 401 that carries it.
+	 * - `insufficient_scope` with `scope` on a 403 is the step-up challenge:
+	 *   the client authorizes again for the scopes named.
+	 *
+	 * Values are stripped of quotes, backslashes and line breaks, so nothing
+	 * a caller passes can break out of its quoted string.
+	 *
+	 * @since 1.2.0
+	 *
+	 * @param string $realm             Protection space.
+	 * @param string $error             `invalid_token`, `insufficient_scope`, or ''.
+	 * @param string $resource_metadata RFC 9728 metadata URL, or ''.
+	 * @param string $scope             Scopes, or ''.
+	 *
+	 * @return string
+	 */
+	public static function challenge( string $realm, string $error = '', string $resource_metadata = '', string $scope = '' ): string {
+		$params = array( 'realm' => $realm );
+
+		if ( '' !== $resource_metadata ) {
+			$params['resource_metadata'] = $resource_metadata;
+		}
+
+		if ( '' !== $scope ) {
+			$params['scope'] = $scope;
+		}
+
+		if ( 'invalid_token' === $error ) {
+			$params['error']             = $error;
+			$params['error_description'] = 'The token is not valid, or has been revoked.';
+		} elseif ( 'insufficient_scope' === $error ) {
+			$params['error']             = $error;
+			$params['error_description'] = 'This needs more access than the token has.';
+		}
+
+		$pairs = array();
+
+		foreach ( $params as $name => $value ) {
+			$pairs[] = $name . '="' . str_replace( array( '"', '\\', "\r", "\n" ), '', $value ) . '"';
+		}
+
+		return 'Bearer ' . implode( ', ', $pairs );
 	}
 
 	/**
@@ -98,7 +160,7 @@ final readonly class Http {
 
 		http_response_code( $response->status );
 
-		foreach ( self::headers( $response, $this->realm, '' !== $this->bearer( $server_vars ) ) as $name => $value ) {
+		foreach ( self::headers( $response, $this->realm, '' !== $this->bearer( $server_vars ), $this->resource_metadata ) as $name => $value ) {
 			header( $name . ': ' . $value );
 		}
 

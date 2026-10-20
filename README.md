@@ -118,6 +118,17 @@ $headers = Http::headers( $reply, realm: 'my-shop', token_sent: '' !== $token );
 
 Every reply is `application/json`, `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. A 401 carries the RFC 6750 challenge: `Bearer realm="my-shop"` when no token was sent, plus `error="invalid_token"` when one was — clients use the difference to decide between asking for a token and reporting the one they have as wrong.
 
+### OAuth: the challenge that starts a sign-in
+
+A server with an OAuth authorization server (see [`sugarcommerce/oauth-server`](https://github.com/sugarcommerce/oauth-server)) names its RFC 9728 protected resource metadata in the challenge. That is how an MCP client finds where to sign in — Claude starts only on a 401 that carries it:
+
+```php
+$headers = Http::headers( $reply, 'my-shop', $token_sent, resource_metadata: $settings->resource_metadata_url(), scope: 'read write' );
+// WWW-Authenticate: Bearer realm="my-shop", resource_metadata="https://…/.well-known/oauth-protected-resource/mcp", scope="read write"
+```
+
+A 403 gets the step-up challenge, `error="insufficient_scope"` with the scopes needed. `Server::missing_scopes( $message, $identity )` says which scopes a `tools/call` lacks, for an application that wants to answer with it rather than with the tool-not-found error `handle()` gives (which never reveals a hidden tool exists — keep that for tools whose names are private).
+
 ## Authorization
 
 Implement `Authenticator` — where tokens live and what a scope means are your decisions:
@@ -219,7 +230,7 @@ composer install
 composer test
 ```
 
-87 tests — every protocol guard, both error mechanisms, scope filtering and the enumeration defence, exception redaction, the schema validator and closed object schemas, capped text summaries with multibyte characters, the reply headers and the 401 challenge, and one request over a real socket against the demo server.
+90 tests — every protocol guard, both error mechanisms, scope filtering and the enumeration defence, exception redaction, the schema validator and closed object schemas, capped text summaries with multibyte characters, the reply headers, the 401 and 403 challenges with the resource metadata pointer, the step-up scopes, and one request over a real socket against the demo server.
 
 ## Try it
 

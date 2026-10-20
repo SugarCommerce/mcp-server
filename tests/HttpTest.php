@@ -19,6 +19,7 @@ use PHPUnit\Framework\TestCase;
 use SugarCommerce\Mcp\Http;
 use SugarCommerce\Mcp\Implementation;
 use SugarCommerce\Mcp\Protocol;
+use SugarCommerce\Mcp\Response;
 use SugarCommerce\Mcp\Schema;
 use SugarCommerce\Mcp\Server;
 use SugarCommerce\Mcp\Tool;
@@ -168,6 +169,35 @@ final class HttpTest extends TestCase {
 	 * RFC 6750: a request with no token is told what to send; one with a
 	 * bad token is told it is invalid.
 	 */
+	/**
+	 * RFC 9728 §5.1: the challenge says where the authorization server is,
+	 * and MCP clients start their sign-in from it.
+	 */
+	public function test_a_401_points_at_the_resource_metadata(): void {
+		$unauthorised = Response::error( 1, Protocol::INVALID_REQUEST, 'Unauthorized.', null, 401 );
+
+		$this->assertSame(
+			'Bearer realm="shop", resource_metadata="https://api.example.com/.well-known/oauth-protected-resource/mcp", scope="read write"',
+			Http::headers( $unauthorised, 'shop', false, 'https://api.example.com/.well-known/oauth-protected-resource/mcp', 'read write' )['WWW-Authenticate']
+		);
+		$this->assertStringContainsString( 'error="invalid_token"', Http::headers( $unauthorised, 'shop', true, 'https://x.example/m' )['WWW-Authenticate'] );
+		$this->assertStringContainsString( 'resource_metadata="https://x.example/m"', Http::headers( $unauthorised, 'shop', true, 'https://x.example/m' )['WWW-Authenticate'] );
+	}
+
+	/**
+	 * MCP 2026-07-28, "Runtime Insufficient Scope Errors".
+	 */
+	public function test_a_403_is_the_step_up_challenge(): void {
+		$forbidden = Response::error( 1, Protocol::INVALID_REQUEST, 'Forbidden.', null, 403 );
+
+		$header = Http::headers( $forbidden, 'shop', true, 'https://x.example/m', 'write' )['WWW-Authenticate'];
+
+		$this->assertStringContainsString( 'error="insufficient_scope"', $header );
+		$this->assertStringContainsString( 'scope="write"', $header );
+		$this->assertStringContainsString( 'resource_metadata="https://x.example/m"', $header );
+		$this->assertSame( 'Bearer realm="a", scope="bc"', Http::challenge( 'a', '', '', "b\"c" ) );
+	}
+
 	public function test_a_401_carries_a_bearer_challenge(): void {
 		$unauthorised = $this->http()->respond( array( 'REQUEST_METHOD' => 'POST' ), $this->envelope( 'tools/list' ) );
 
