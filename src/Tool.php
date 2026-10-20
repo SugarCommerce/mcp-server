@@ -46,6 +46,11 @@ final readonly class Tool {
 	 *                                           decide what needs confirming.
 	 * @param bool                 $destructive  Whether it can destroy data.
 	 * @param bool                 $idempotent   Whether repeating it is harmless.
+	 * @param bool                 $open_world   Whether it reaches beyond this
+	 *                                           server's own data — sends an
+	 *                                           email, calls another service,
+	 *                                           makes something the outside
+	 *                                           world can use. Since 1.3.0.
 	 *
 	 * @throws \InvalidArgumentException On a malformed name or schema.
 	 */
@@ -60,6 +65,7 @@ final readonly class Tool {
 		public bool $read_only = false,
 		public bool $destructive = false,
 		public bool $idempotent = false,
+		public bool $open_world = false,
 	) {
 		// The specification allows letters, digits, underscore, hyphen and
 		// dot, up to 128 characters. A name outside that is liable to be
@@ -112,11 +118,17 @@ final readonly class Tool {
 			$definition['outputSchema'] = $this->output_schema;
 		}
 
+		// Every hint explicit, never left to the spec's defaults (which
+		// assume the worst: destructive and open-world), because directory
+		// reviewers and confirmation prompts read them as stated. A title,
+		// when given, rides in the annotations too, where 2025-03-26-era
+		// clients look for it.
 		$definition['annotations'] = array(
 			'readOnlyHint'    => $this->read_only,
 			'destructiveHint' => $this->destructive,
 			'idempotentHint'  => $this->idempotent,
-		);
+			'openWorldHint'   => $this->open_world,
+		) + ( '' === $this->title ? array() : array( 'title' => $this->title ) );
 
 		return $definition;
 	}

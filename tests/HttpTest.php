@@ -153,6 +153,18 @@ final class HttpTest extends TestCase {
 		$this->assertSame( Protocol::HEADER_MISMATCH, $response->body['error']['code'] );
 	}
 
+	/**
+	 * A 2025-11-25 client over HTTP: the version in the header, no _meta.
+	 */
+	public function test_a_legacy_client_is_served_over_http(): void {
+		$body     = (string) json_encode( array( 'jsonrpc' => '2.0', 'id' => 3, 'method' => 'tools/list', 'params' => new \stdClass() ) );
+		$response = $this->post( $body, array( 'HTTP_MCP_PROTOCOL_VERSION' => '2025-11-25' ) );
+
+		$this->assertSame( 200, $response->status );
+		$this->assertArrayHasKey( 'tools', $response->body['result'] );
+		$this->assertArrayNotHasKey( 'resultType', $response->body['result'] );
+	}
+
 	/* ─── Reply headers ─────────────────────────────────────────────── */
 
 	public function test_every_reply_is_json_uncached_and_unsniffed(): void {

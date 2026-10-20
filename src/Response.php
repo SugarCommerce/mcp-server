@@ -67,6 +67,23 @@ final readonly class Response {
 	}
 
 	/**
+	 * A successful result in a legacy revision (2025-11-25 and earlier).
+	 *
+	 * Without `resultType` and the server's `_meta`, which those revisions
+	 * do not define.
+	 *
+	 * @since 1.3.0
+	 *
+	 * @param string|int|null      $id     Request id.
+	 * @param array<string, mixed> $result Result payload.
+	 *
+	 * @return self
+	 */
+	public static function legacy( string|int|null $id, array $result ): self {
+		return new self( array( 'jsonrpc' => '2.0', 'id' => $id, 'result' => array() === $result ? new \stdClass() : $result ) );
+	}
+
+	/**
 	 * An error.
 	 *
 	 * @since 1.0.0

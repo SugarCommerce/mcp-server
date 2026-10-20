@@ -22,19 +22,27 @@ namespace SugarCommerce\Mcp;
 final readonly class Protocol {
 
 	/**
-	 * The revision this server implements.
+	 * The latest revision this server implements.
 	 */
 	public const string VERSION = '2026-07-28';
 
 	/**
-	 * Earlier revisions accepted on a request.
-	 *
-	 * The 2026-07-28 revision is a breaking change — it made the protocol
-	 * stateless, added `resultType` to every result, and reassigned error
-	 * codes — so a client asking for an older one is told plainly rather
-	 * than served responses it will misparse.
+	 * Revisions that carry the version on every request ("modern").
 	 */
-	public const array SUPPORTED = array( self::VERSION );
+	public const array MODERN = array( self::VERSION );
+
+	/**
+	 * Revisions that agree a version in `initialize` ("legacy"), newest
+	 * first. Claude's and ChatGPT's connectors spoke these when this was
+	 * written; 2025-03-26 and earlier are not served (no structured tool
+	 * output, no protocol version header).
+	 */
+	public const array LEGACY = array( '2025-11-25', '2025-06-18' );
+
+	/**
+	 * Every revision served, newest first.
+	 */
+	public const array SUPPORTED = array( self::VERSION, '2025-11-25', '2025-06-18' );
 
 	/* ─── `_meta` keys reserved by the specification ────────────────── */
 
@@ -88,5 +96,34 @@ final readonly class Protocol {
 	 */
 	public static function supports( string $version ): bool {
 		return in_array( $version, self::SUPPORTED, true );
+	}
+
+	/**
+	 * Whether a revision is a modern one: stateless, `_meta` on every request.
+	 *
+	 * @since 1.3.0
+	 *
+	 * @param string $version Revision string.
+	 *
+	 * @return bool
+	 */
+	public static function modern( string $version ): bool {
+		return in_array( $version, self::MODERN, true );
+	}
+
+	/**
+	 * The revision to answer an `initialize` with.
+	 *
+	 * The one asked for when this server speaks it in that era, otherwise
+	 * the latest legacy one (2025-11-25, "Version Negotiation").
+	 *
+	 * @since 1.3.0
+	 *
+	 * @param string $requested The client's `protocolVersion`.
+	 *
+	 * @return string
+	 */
+	public static function negotiate( string $requested ): string {
+		return in_array( $requested, self::LEGACY, true ) ? $requested : self::LEGACY[0];
 	}
 }

@@ -104,42 +104,105 @@ final class ServerTest extends TestCase {
 
 	/* ─── Lifecycle ─────────────────────────────────────────────────── */
 
-	public function test_initialize_reports_the_current_revision(): void {
-		$response = $this->server()->handle( $this->message( 'initialize' ), self::ADMIN );
-
-		$this->assertSame( Protocol::VERSION, $response->body['result']['protocolVersion'] );
-		$this->assertSame( '2026-07-28', $response->body['result']['protocolVersion'] );
-		$this->assertArrayHasKey( 'tools', $response->body['result']['capabilities'] );
-		$this->assertSame( 'test', $response->body['result']['serverInfo']['name'] );
+	/**
+	 * A legacy client's request after initialize: the version in the
+	 * header, no per-request _meta.
+	 *
+	 * @param array<string, mixed> $params
+	 */
+	private function legacy( string $method, array $params = array() ): array {
+		return array( 'jsonrpc' => '2.0', 'id' => 1, 'method' => $method, 'params' => $params );
 	}
 
 	/**
-	 * `initialize` is how a client learns the version, so it cannot be
-	 * required to already know it.
+	 * 2025-11-25 "Version Negotiation": echo a version the server speaks.
 	 */
-	public function test_initialize_does_not_require_the_meta_block(): void {
-		$response = $this->server()->handle(
-			array( 'jsonrpc' => '2.0', 'id' => 1, 'method' => 'initialize', 'params' => array() ),
-			self::ADMIN
-		);
+	#[DataProvider( 'legacy_versions' )]
+	public function test_initialize_echoes_a_legacy_version_it_speaks( string $version ): void {
+		$response = $this->server()->handle( $this->legacy( 'initialize', array( 'protocolVersion' => $version ) ), self::ADMIN );
 
-		$this->assertFalse( $response->is_error() );
+		$this->assertSame( $version, $response->body['result']['protocolVersion'] );
+		$this->assertArrayHasKey( 'tools', $response->body['result']['capabilities'] );
+		$this->assertSame( 'test', $response->body['result']['serverInfo']['name'] );
+		$this->assertArrayNotHasKey( 'resultType', $response->body['result'], 'Legacy results have no resultType.' );
 	}
 
-	public function test_initialize_rejects_a_version_it_cannot_speak(): void {
-		$response = $this->server()->handle(
-			array( 'jsonrpc' => '2.0', 'id' => 1, 'method' => 'initialize', 'params' => array( 'protocolVersion' => '2025-06-18' ) ),
-			self::ADMIN
-		);
+	/**
+	 * @return array<string, array{0: string}>
+	 */
+	public static function legacy_versions(): array {
+		return array( '2025-11-25' => array( '2025-11-25' ), '2025-06-18' => array( '2025-06-18' ) );
+	}
 
-		$this->assertSame( Protocol::UNSUPPORTED_PROTOCOL_VERSION, $response->body['error']['code'] );
+	/**
+	 * Otherwise the latest legacy one — never 2026-07-28, which has no
+	 * initialize.
+	 */
+	public function test_initialize_answers_an_unknown_version_with_the_latest_legacy_one(): void {
+		foreach ( array( '2024-11-05', '2025-03-26', '2026-07-28', '2099-01-01', '' ) as $asked ) {
+			$response = $this->server()->handle( $this->legacy( 'initialize', '' === $asked ? array() : array( 'protocolVersion' => $asked ) ), self::ADMIN );
+
+			$this->assertSame( '2025-11-25', $response->body['result']['protocolVersion'], $asked );
+		}
+	}
+
+	/**
+	 * A legacy session, as Claude's and ChatGPT's connectors run one: the
+	 * header names the version, there is no _meta, and results are shaped
+	 * for that revision.
+	 */
+	#[DataProvider( 'legacy_versions' )]
+	public function test_a_legacy_client_lists_and_calls_tools( string $version ): void {
+		$server = $this->server();
+		$list   = $server->handle( $this->legacy( 'tools/list' ), self::READER, $version );
+		$call   = $server->handle( $this->legacy( 'tools/call', array( 'name' => 'echo', 'arguments' => array( 'message' => 'hi' ) ) ), self::READER, $version );
+		$ping   = $server->handle( $this->legacy( 'ping' ), self::READER, $version );
+
+		$this->assertSame( array( 'echo', 'explodes' ), array_column( $list->body['result']['tools'], 'name' ) );
+		$this->assertArrayNotHasKey( 'resultType', $list->body['result'] );
+		$this->assertArrayNotHasKey( 'ttlMs', $list->body['result'] );
+		$this->assertArrayNotHasKey( '_meta', $list->body['result'] );
+		$this->assertSame( 'hi', $call->body['result']['content'][0]['text'] );
+		$this->assertArrayNotHasKey( 'resultType', $call->body['result'] );
+		$this->assertSame( '{}', json_encode( $ping->body['result'] ) );
+	}
+
+	public function test_a_legacy_request_in_an_unsupported_version_is_refused(): void {
+		$response = $this->server()->handle( $this->legacy( 'tools/list' ), self::ADMIN, '2025-03-26' );
+
 		$this->assertSame( 400, $response->status );
+		$this->assertSame( Protocol::UNSUPPORTED_PROTOCOL_VERSION, $response->body['error']['code'] );
+		$this->assertSame( Protocol::SUPPORTED, $response->body['error']['data']['supported'] );
 	}
 
-	public function test_ping_answers(): void {
+	/**
+	 * 2026-07-28 removed ping.
+	 */
+	public function test_a_modern_ping_is_not_found(): void {
 		$response = $this->server()->handle( $this->message( 'ping' ), self::ADMIN );
 
-		$this->assertFalse( $response->is_error() );
+		$this->assertSame( Protocol::METHOD_NOT_FOUND, $response->body['error']['code'] );
+	}
+
+	public function test_server_discover_names_every_version(): void {
+		$response = $this->server()->handle( $this->message( 'server/discover' ), self::ADMIN );
+		$result   = $response->body['result'];
+
+		$this->assertSame( array( '2026-07-28', '2025-11-25', '2025-06-18' ), $result['supportedVersions'] );
+		$this->assertSame( 'complete', $result['resultType'] );
+		$this->assertSame( 'test', $result['_meta'][ Protocol::META_SERVER_INFO ]['name'] );
+		$this->assertArrayHasKey( 'ttlMs', $result );
+		$this->assertSame( 'public', $result['cacheScope'] );
+
+		// Even asked in a version it does not speak: it is how a client finds out.
+		$this->assertFalse( $this->server()->handle( $this->message( 'server/discover', array(), 1, '2099-01-01' ), self::ADMIN )->is_error() );
+	}
+
+	public function test_a_modern_tool_list_is_a_private_cacheable_result(): void {
+		$result = $this->server()->handle( $this->message( 'tools/list' ), self::READER )->body['result'];
+
+		$this->assertSame( Server::TTL_MS, $result['ttlMs'] );
+		$this->assertSame( 'private', $result['cacheScope'] );
 	}
 
 	/**
@@ -179,15 +242,14 @@ final class ServerTest extends TestCase {
 	 */
 	public static function answering_methods(): array {
 		return array(
-			'initialize' => array( 'initialize', array() ),
-			'ping'       => array( 'ping', array() ),
-			'tools/list' => array( 'tools/list', array() ),
+			'server/discover' => array( 'server/discover', array() ),
+			'tools/list'      => array( 'tools/list', array() ),
 			'tools/call' => array( 'tools/call', array( 'name' => 'echo', 'arguments' => array( 'message' => 'hi' ) ) ),
 		);
 	}
 
 	public function test_results_identify_the_server(): void {
-		$response = $this->server()->handle( $this->message( 'ping' ), self::ADMIN );
+		$response = $this->server()->handle( $this->message( 'tools/list' ), self::ADMIN );
 
 		$this->assertSame( 'test', $response->body['result']['_meta'][ Protocol::META_SERVER_INFO ]['name'] );
 	}
@@ -222,11 +284,19 @@ final class ServerTest extends TestCase {
 		$this->assertSame( 400, $response->status );
 	}
 
-	public function test_an_older_revision_is_refused(): void {
-		$response = $this->server()->handle( $this->message( 'tools/list', array(), 1, '2025-06-18' ), self::ADMIN );
+	public function test_an_unknown_revision_is_refused_with_the_list(): void {
+		$response = $this->server()->handle( $this->message( 'tools/list', array(), 1, '2025-03-26' ), self::ADMIN );
 
 		$this->assertSame( Protocol::UNSUPPORTED_PROTOCOL_VERSION, $response->body['error']['code'] );
-		$this->assertSame( array( Protocol::VERSION ), $response->body['error']['data']['supported'] );
+		$this->assertSame( Protocol::SUPPORTED, $response->body['error']['data']['supported'] );
+		$this->assertSame( '2025-03-26', $response->body['error']['data']['requested'] );
+	}
+
+	public function test_a_request_with_no_version_anywhere_is_refused(): void {
+		$response = $this->server()->handle( $this->legacy( 'tools/list' ), self::ADMIN );
+
+		$this->assertSame( 400, $response->status );
+		$this->assertSame( Protocol::INVALID_PARAMS, $response->body['error']['code'] );
 	}
 
 	public function test_a_header_disagreeing_with_the_body_is_refused(): void {
@@ -315,6 +385,27 @@ final class ServerTest extends TestCase {
 		$this->assertTrue( $byName['echo']['annotations']['readOnlyHint'] );
 		$this->assertTrue( $byName['destroy']['annotations']['destructiveHint'] );
 		$this->assertFalse( $byName['destroy']['annotations']['readOnlyHint'] );
+
+		foreach ( $tools as $tool ) {
+			$this->assertSame( array( 'readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint' ), array_keys( $tool['annotations'] ), 'Every hint is explicit.' );
+		}
+	}
+
+	public function test_a_title_and_an_open_world_hint_are_published(): void {
+		$tool = new Tool(
+			name: 'send',
+			description: 'Send an email.',
+			input_schema: array( 'type' => 'object' ),
+			handler: static fn(): ToolResult => ToolResult::text( 'sent' ),
+			title: 'Send an email',
+			open_world: true,
+		);
+
+		$definition = $tool->definition();
+
+		$this->assertSame( 'Send an email', $definition['title'] );
+		$this->assertSame( 'Send an email', $definition['annotations']['title'] );
+		$this->assertTrue( $definition['annotations']['openWorldHint'] );
 	}
 
 	/* ─── Tool calls ────────────────────────────────────────────────── */

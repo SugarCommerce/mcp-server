@@ -1,6 +1,6 @@
 # MCP Server
 
-A Model Context Protocol server for plain PHP. Implements the **2026-07-28** revision: stateless per-request negotiation, JSON-RPC 2.0 over Streamable HTTP, typed tools with schema validation, and scope-based authorization. Zero dependencies.
+A Model Context Protocol server for plain PHP. Implements the **2026-07-28** revision — and serves clients still on **2025-11-25** and **2025-06-18** from the same endpoint — with stateless per-request negotiation, JSON-RPC 2.0 over Streamable HTTP, typed tools with schema validation, and scope-based authorization. Zero dependencies.
 
 ## Why
 
@@ -164,16 +164,21 @@ $server->audit( function ( string $tool, array $args, ?Identity $who, bool $ok )
 
 Tool calls are arbitrary code execution against your data on behalf of a language model. Log them.
 
-## What is new in 2026-07-28
+## Versions: one endpoint, two eras
 
-If you have an implementation targeting `2025-06-18` or `2025-11-25`, it will not interoperate. The changes are breaking:
+The 2026-07-28 revision is a breaking change: the protocol is stateless, every request carries `io.modelcontextprotocol/protocolVersion` and `io.modelcontextprotocol/clientCapabilities` in `_meta`, every result carries `resultType`, `initialize` and `ping` are gone, `server/discover` is required, list results are cacheable (`ttlMs`, `cacheScope`), and the error codes moved (`-32020` header mismatch, `-32021` missing capability, `-32022` unsupported version; `-32002` and `-32042` retired).
 
-- **The protocol is stateless.** Nothing may be inferred from an earlier request, even on the same connection. Every request carries `io.modelcontextprotocol/protocolVersion` and `io.modelcontextprotocol/clientCapabilities` in `_meta`, both **required** — a request missing either is `-32602` with HTTP 400.
-- **Every result carries `resultType`** — `"complete"` or `"input_required"`. A client treats an absent one as `"complete"` only for backward compatibility.
-- **New error codes**: `-32020` header mismatch, `-32021` missing client capability, `-32022` unsupported protocol version.
-- **`-32002` and `-32042` are retired** and must never be emitted; resource-not-found is now `-32602`.
-- **New codes must not land in `-32000`–`-32019`**, which is now legacy.
-- **Tool sets may vary by authorization** — credentials are per-request input — but never by connection.
+Hosted assistants did not all move at once, so this server is **dual-era** (2026-07-28, "Versioning and Compatibility"), choosing per request:
+
+| The request | Revision | Served as |
+|---|---|---|
+| `initialize` | negotiated: the client's version if it is 2025-11-25 or 2025-06-18, otherwise 2025-11-25 | legacy — no `resultType`, no server `_meta` |
+| `_meta` names a version | that one; the `MCP-Protocol-Version` header must match | 2026-07-28 rules: capabilities required, `resultType`, `_meta.serverInfo`, cacheable lists |
+| no `_meta`, header names a legacy version | the header's | legacy, `ping` included |
+| neither | refused, 400 | — |
+| a version not served | refused, 400, `-32022` with `supported` and `requested` | — |
+
+`server/discover` answers in any version, since it is how a client learns which to speak. No session is ever assigned to a legacy client (those revisions allow that), so `Server::handle()` stays a pure function and nothing is remembered between requests. 2025-03-26 and earlier are not served: they have no structured tool output and no version header.
 
 The practical consequence of statelessness is that there is no session to keep. `Server::handle()` is a pure function from a decoded message to a response, so the server scales horizontally for free and is testable without a socket.
 
@@ -221,6 +226,8 @@ Tools are what an application server has to offer, and they are the whole of wha
 
 See [SECURITY.md](SECURITY.md). The specification asks servers to validate inputs, enforce access control, rate limit, and sanitise outputs; the first two are handled here, and the last two are yours — pair this with [`sugarcommerce/rate-limit`](https://github.com/sugarcommerce/rate-limit) in front of `serve()`.
 
+Every tool publishes all four hints explicitly — `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint` (`open_world:` on `Tool`, for a tool that emails, calls another service or makes something usable outside) — and its `title` when given, because the spec's defaults assume the worst and directory reviewers read them as stated.
+
 Note that tool **annotations are untrusted** from the client's point of view: `readOnlyHint` is a hint for a confirmation UI, never an enforcement mechanism. Enforce in the handler.
 
 ## Testing
@@ -230,7 +237,7 @@ composer install
 composer test
 ```
 
-90 tests — every protocol guard, both error mechanisms, scope filtering and the enumeration defence, exception redaction, the schema validator and closed object schemas, capped text summaries with multibyte characters, the reply headers, the 401 and 403 challenges with the resource metadata pointer, the step-up scopes, and one request over a real socket against the demo server.
+97 tests — every protocol guard, version negotiation for each revision served, legacy and modern result shapes,, both error mechanisms, scope filtering and the enumeration defence, exception redaction, the schema validator and closed object schemas, capped text summaries with multibyte characters, the reply headers, the 401 and 403 challenges with the resource metadata pointer, the step-up scopes, and one request over a real socket against the demo server.
 
 ## Try it
 

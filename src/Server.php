@@ -15,7 +15,9 @@ namespace SugarCommerce\Mcp;
 /**
  * Class Server
  *
- * Dispatches JSON-RPC messages for the 2026-07-28 revision.
+ * Dispatches JSON-RPC messages for the 2026-07-28 revision, and for the
+ * two before it (2025-11-25, 2025-06-18) that clients still send — a
+ * "dual-era" server in the 2026-07-28 spec's words.
  *
  * The revision is stateless by design: nothing is remembered between
  * requests, and every request must carry its own protocol version and
@@ -27,6 +29,12 @@ namespace SugarCommerce\Mcp;
  * @since 1.0.0
  */
 final class Server {
+
+	/**
+	 * How long a client may cache a list or a discovery answer: five
+	 * minutes. The tools only change when the code is deployed.
+	 */
+	public const int TTL_MS = 300_000;
 
 	/**
 	 * Registered tools, keyed by name.
@@ -189,17 +197,32 @@ final class Server {
 			}
 		}
 
-		$rejection = $this->check_protocol( $request, $header_version );
+		// The legacy handshake: how a client on 2025-11-25 or earlier opens.
+		// It carries no per-request version, so it is answered before one
+		// is looked for.
+		if ( 'initialize' === $request->method ) {
+			return $this->initialize( $request );
+		}
 
-		if ( null !== $rejection ) {
-			return $rejection;
+		// Discovery answers whatever version the client speaks: it is how
+		// a client learns which to speak.
+		if ( 'server/discover' === $request->method ) {
+			return $this->discover( $request );
+		}
+
+		$version = $this->version( $request, $header_version );
+
+		if ( $version instanceof Response ) {
+			return $version;
 		}
 
 		return match ( $request->method ) {
-			'initialize' => $this->initialize( $request ),
-			'ping'       => Response::result( $request->id, array(), $this->info ),
-			'tools/list' => $this->list_tools( $request, $identity ),
-			'tools/call' => $this->call_tool( $request, $identity ),
+			// Removed in 2026-07-28; kept for the revisions that have it.
+			'ping'       => Protocol::modern( $version )
+				? Response::error( $request->id, Protocol::METHOD_NOT_FOUND, 'Method not found: ping' )
+				: $this->reply( $request, $version, array() ),
+			'tools/list' => $this->list_tools( $request, $identity, $version ),
+			'tools/call' => $this->call_tool( $request, $identity, $version ),
 			default      => Response::error(
 				$request->id,
 				Protocol::METHOD_NOT_FOUND,
@@ -209,59 +232,67 @@ final class Server {
 	}
 
 	/**
-	 * Enforce the per-request protocol metadata.
+	 * The revision a request is in, or the refusal.
 	 *
-	 * Under the stateless model these fields are not optional and not
-	 * inferable from an earlier call, so a request without them is
-	 * malformed rather than merely unusual.
+	 * Two eras on one endpoint (MCP 2026-07-28, "Versioning and
+	 * Compatibility"):
 	 *
-	 * @since 1.0.0
+	 * - **Modern** (2026-07-28): the version is in the request's `_meta`,
+	 *   with the client's capabilities, and the `MCP-Protocol-Version`
+	 *   header, when sent, must match it.
+	 * - **Legacy** (2025-11-25, 2025-06-18): the version was agreed in
+	 *   `initialize` and every later request carries it in the header.
+	 *   Nothing is remembered between requests — no session is ever
+	 *   assigned, which those revisions allow — so the header is the whole
+	 *   of what this server knows.
+	 *
+	 * A request with neither is refused rather than read as 2025-03-26 (as
+	 * the legacy transport would allow): this server does not speak it.
+	 *
+	 * @since 1.3.0
 	 *
 	 * @param Request     $request        Request.
 	 * @param string|null $header_version `MCP-Protocol-Version` header.
 	 *
-	 * @return Response|null Null when the request is acceptable.
+	 * @return string|Response The revision, or the error to send.
 	 */
-	private function check_protocol( Request $request, ?string $header_version ): ?Response {
-		// `initialize` is how a client discovers the version, so it cannot
-		// be required to already know it.
-		if ( 'initialize' === $request->method ) {
-			return null;
-		}
-
+	private function version( Request $request, ?string $header_version ): string|Response {
+		$header  = null === $header_version ? '' : trim( $header_version );
 		$version = $request->protocol_version();
 
-		if ( '' === $version ) {
+		if ( '' === $version && '' === $header ) {
 			return Response::error(
 				$request->id,
 				Protocol::INVALID_PARAMS,
-				'Missing required _meta field: ' . Protocol::META_PROTOCOL_VERSION,
-				null,
+				'Missing required _meta field: ' . Protocol::META_PROTOCOL_VERSION . ' (or, for a client on ' . implode( ' or ', Protocol::LEGACY ) . ', the MCP-Protocol-Version header).',
+				array( 'supported' => Protocol::SUPPORTED ),
 				400
 			);
 		}
 
-		if ( null !== $header_version && '' !== $header_version && $header_version !== $version ) {
+		if ( '' !== $version && '' !== $header && $header !== $version ) {
 			return Response::error(
 				$request->id,
 				Protocol::HEADER_MISMATCH,
 				'The MCP-Protocol-Version header does not match the version in the request body.',
-				array( 'header' => $header_version, 'body' => $version ),
+				array( 'header' => $header, 'body' => $version ),
 				400
 			);
 		}
+
+		$version = '' === $version ? $header : $version;
 
 		if ( ! Protocol::supports( $version ) ) {
 			return Response::error(
 				$request->id,
 				Protocol::UNSUPPORTED_PROTOCOL_VERSION,
 				'Unsupported protocol version: ' . $version,
-				array( 'supported' => Protocol::SUPPORTED ),
+				array( 'supported' => Protocol::SUPPORTED, 'requested' => $version ),
 				400
 			);
 		}
 
-		if ( null === $request->client_capabilities() ) {
+		if ( Protocol::modern( $version ) && null === $request->client_capabilities() ) {
 			return Response::error(
 				$request->id,
 				Protocol::INVALID_PARAMS,
@@ -271,37 +302,75 @@ final class Server {
 			);
 		}
 
-		return null;
+		return $version;
+	}
+
+	/**
+	 * A result, shaped for the revision.
+	 *
+	 * 2026-07-28 requires `resultType` on every result and asks servers to
+	 * name themselves in `_meta`; the earlier revisions have neither.
+	 *
+	 * @since 1.3.0
+	 *
+	 * @param Request              $request Request.
+	 * @param string               $version Revision.
+	 * @param array<string, mixed> $result  Payload.
+	 *
+	 * @return Response
+	 */
+	private function reply( Request $request, string $version, array $result ): Response {
+		return Protocol::modern( $version )
+			? Response::result( $request->id, $result, $this->info )
+			: Response::legacy( $request->id, $result );
 	}
 
 	/* ─── Methods ───────────────────────────────────────────────────── */
 
 	/**
-	 * Answer `initialize`.
+	 * Answer `initialize`, the legacy handshake.
+	 *
+	 * Negotiated as 2025-11-25 says: the requested revision when this
+	 * server speaks it, otherwise the latest legacy one it does — never
+	 * 2026-07-28, which has no `initialize`. A client that cannot speak the
+	 * answer disconnects, which is the spec's own fallback.
 	 *
 	 * @since 1.0.0
+	 * @since 1.3.0 Negotiates a legacy revision instead of refusing one.
 	 *
 	 * @param Request $request Request.
 	 *
 	 * @return Response
 	 */
 	private function initialize( Request $request ): Response {
-		$requested = $request->string( 'protocolVersion' );
-
-		if ( '' !== $requested && ! Protocol::supports( $requested ) ) {
-			return Response::error(
-				$request->id,
-				Protocol::UNSUPPORTED_PROTOCOL_VERSION,
-				'Unsupported protocol version: ' . $requested,
-				array( 'supported' => Protocol::SUPPORTED ),
-				400
-			);
-		}
-
 		$result = array(
-			'protocolVersion' => Protocol::VERSION,
+			'protocolVersion' => Protocol::negotiate( $request->string( 'protocolVersion' ) ),
 			'capabilities'    => array( 'tools' => array( 'listChanged' => false ) ),
 			'serverInfo'      => $this->info->to_array(),
+		);
+
+		if ( '' !== $this->instructions ) {
+			$result['instructions'] = $this->instructions;
+		}
+
+		return Response::legacy( $request->id, $result );
+	}
+
+	/**
+	 * Answer `server/discover` (2026-07-28): versions, capabilities, identity.
+	 *
+	 * @since 1.3.0
+	 *
+	 * @param Request $request Request.
+	 *
+	 * @return Response
+	 */
+	private function discover( Request $request ): Response {
+		$result = array(
+			'supportedVersions' => Protocol::SUPPORTED,
+			'capabilities'      => array( 'tools' => new \stdClass() ),
+			'ttlMs'             => self::TTL_MS,
+			'cacheScope'        => 'public',
 		);
 
 		if ( '' !== $this->instructions ) {
@@ -316,16 +385,20 @@ final class Server {
 	 *
 	 * The set may vary by the caller's scopes — credentials are
 	 * per-request input — but never by connection, and the order is
-	 * stable so clients can cache it.
+	 * stable so clients can cache it. 2026-07-28 makes the list a
+	 * cacheable result: `ttlMs`, and `cacheScope: private`, because what
+	 * one caller sees is not what the next does.
 	 *
 	 * @since 1.0.0
+	 * @since 1.3.0 `$version`.
 	 *
 	 * @param Request       $request  Request.
 	 * @param Identity|null $identity Caller.
+	 * @param string        $version  Revision.
 	 *
 	 * @return Response
 	 */
-	private function list_tools( Request $request, ?Identity $identity ): Response {
+	private function list_tools( Request $request, ?Identity $identity, string $version ): Response {
 		$definitions = array();
 
 		foreach ( $this->tools as $tool ) {
@@ -334,20 +407,29 @@ final class Server {
 			}
 		}
 
-		return Response::result( $request->id, array( 'tools' => $definitions ), $this->info );
+		$result = array( 'tools' => $definitions );
+
+		if ( Protocol::modern( $version ) ) {
+			$result += array( 'ttlMs' => self::TTL_MS, 'cacheScope' => 'private' );
+		}
+
+		return $this->reply( $request, $version, $result );
 	}
 
 	/**
-	 * Answer `tools/call`.
+	 * Answer `tools/call`. The result's shape is the same in every revision
+	 * this server speaks (structured content arrived in 2025-06-18).
 	 *
 	 * @since 1.0.0
+	 * @since 1.3.0 `$version`.
 	 *
 	 * @param Request       $request  Request.
 	 * @param Identity|null $identity Caller.
+	 * @param string        $version  Revision.
 	 *
 	 * @return Response
 	 */
-	private function call_tool( Request $request, ?Identity $identity ): Response {
+	private function call_tool( Request $request, ?Identity $identity, string $version ): Response {
 		$name = $request->string( 'name' );
 		$tool = $this->tools[ $name ] ?? null;
 
@@ -367,11 +449,7 @@ final class Server {
 		if ( array() !== $problems ) {
 			$this->record( $tool->name, $arguments, $identity, false );
 
-			return Response::result(
-				$request->id,
-				ToolResult::failed( 'Invalid arguments: ' . implode( ' ', $problems ) )->to_array(),
-				$this->info
-			);
+			return $this->reply( $request, $version, ToolResult::failed( 'Invalid arguments: ' . implode( ' ', $problems ) )->to_array() );
 		}
 
 		try {
@@ -382,16 +460,12 @@ final class Server {
 			// The message is deliberately generic: an exception can carry a
 			// file path, a query, or a credential, and this response goes
 			// to a language model and often into a transcript.
-			return Response::result(
-				$request->id,
-				ToolResult::failed( 'The tool failed to run.' )->to_array(),
-				$this->info
-			);
+			return $this->reply( $request, $version, ToolResult::failed( 'The tool failed to run.' )->to_array() );
 		}
 
 		$this->record( $tool->name, $arguments, $identity, ! $result->is_error );
 
-		return Response::result( $request->id, $result->to_array(), $this->info );
+		return $this->reply( $request, $version, $result->to_array() );
 	}
 
 	/**
