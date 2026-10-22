@@ -46,17 +46,52 @@ final readonly class Protocol {
 
 	/* ─── `_meta` keys reserved by the specification ────────────────── */
 
+	/**
+	 * The revision a 2026-07-28 request is written in.
+	 */
 	public const string META_PROTOCOL_VERSION = 'io.modelcontextprotocol/protocolVersion';
+
+	/**
+	 * The client's self-reported name and version.
+	 */
 	public const string META_CLIENT_INFO = 'io.modelcontextprotocol/clientInfo';
+
+	/**
+	 * The capabilities the client declares for one request.
+	 */
 	public const string META_CLIENT_CAPABILITIES = 'io.modelcontextprotocol/clientCapabilities';
+
+	/**
+	 * This server's name and version, on every 2026-07-28 result.
+	 */
 	public const string META_SERVER_INFO = 'io.modelcontextprotocol/serverInfo';
 
 	/* ─── JSON-RPC 2.0 error codes ──────────────────────────────────── */
 
+	/**
+	 * The body is not valid JSON.
+	 */
 	public const int PARSE_ERROR = -32700;
+
+	/**
+	 * The JSON is not a valid request: no method, a refused batch, no
+	 * credentials, a refused origin.
+	 */
 	public const int INVALID_REQUEST = -32600;
+
+	/**
+	 * The method does not exist in the revision spoken.
+	 */
 	public const int METHOD_NOT_FOUND = -32601;
+
+	/**
+	 * The parameters are wrong: a missing `_meta` field, an unknown tool.
+	 */
 	public const int INVALID_PARAMS = -32602;
+
+	/**
+	 * Something failed on this side; the detail stays in the server's log.
+	 */
 	public const int INTERNAL_ERROR = -32603;
 
 	/* ─── Codes defined by MCP ──────────────────────────────────────── */

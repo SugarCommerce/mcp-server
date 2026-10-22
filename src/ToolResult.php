@@ -85,7 +85,7 @@ final readonly class ToolResult {
 	 * @return self
 	 */
 	public static function structured( mixed $data, string $summary = '' ): self {
-		$encoded = (string) json_encode( $data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
+		$encoded = (string) json_encode( $data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE );
 
 		return new self( array( Content::text( '' !== $summary ? $summary : $encoded ) ), $data );
 	}
@@ -126,7 +126,7 @@ final readonly class ToolResult {
 	 * @return string
 	 */
 	public static function summary( mixed $data, string $heading, int $limit = self::SUMMARY_LIMIT ): string {
-		$json = (string) json_encode( $data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION );
+		$json = (string) json_encode( $data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_INVALID_UTF8_SUBSTITUTE );
 
 		// Characters, not bytes: every byte that is not a UTF-8 continuation
 		// byte starts one. json_encode() only ever writes valid UTF-8.

@@ -49,8 +49,8 @@ final readonly class Request {
 	 * @return self
 	 */
 	public static function from_array( array $message ): self {
-		$params = is_array( $message['params'] ?? null ) ? $message['params'] : array();
-		$meta   = is_array( $params['_meta'] ?? null ) ? $params['_meta'] : array();
+		$params = is_array( $message['params'] ?? null ) ? self::keyed( $message['params'] ) : array();
+		$meta   = is_array( $params['_meta'] ?? null ) ? self::keyed( $params['_meta'] ) : array();
 		$id     = $message['id'] ?? null;
 
 		return new self(
@@ -95,7 +95,7 @@ final readonly class Request {
 	public function client_capabilities(): ?array {
 		$capabilities = $this->meta[ Protocol::META_CLIENT_CAPABILITIES ] ?? null;
 
-		return is_array( $capabilities ) ? $capabilities : null;
+		return is_array( $capabilities ) ? self::keyed( $capabilities ) : null;
 	}
 
 	/**
@@ -151,5 +151,38 @@ final readonly class Request {
 		$value = $this->params[ $key ] ?? null;
 
 		return is_array( $value ) ? $value : array();
+	}
+
+	/**
+	 * An object parameter, by name.
+	 *
+	 * What a handler is given as its arguments: the members of a JSON
+	 * object. Unlike {@see self::array()} it drops any member PHP has
+	 * turned into an integer key (a name like "5"), which no tool's
+	 * schema names.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @param string $key Parameter name.
+	 *
+	 * @return array<string, mixed> Empty when absent or not an array.
+	 */
+	public function object( string $key ): array {
+		$value = $this->params[ $key ] ?? null;
+
+		return is_array( $value ) ? self::keyed( $value ) : array();
+	}
+
+	/**
+	 * The string-keyed members of a decoded JSON object.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @param array<mixed> $value Decoded value.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function keyed( array $value ): array {
+		return array_filter( $value, is_string( ... ), ARRAY_FILTER_USE_KEY );
 	}
 }

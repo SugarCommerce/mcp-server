@@ -15,7 +15,8 @@ namespace SugarCommerce\Mcp;
 /**
  * Class Schema
  *
- * A deliberately small subset of JSON Schema 2020-12: types, `required`,
+ * A deliberately small subset of JSON Schema 2020-12: types (one, or a
+ * list of them), `required`,
  * `enum`, `additionalProperties`, string lengths and patterns, numeric
  * bounds, and array sizes.
  *
@@ -71,19 +72,32 @@ final readonly class Schema {
 	 * @param array<string, mixed> $schema Schema.
 	 * @param string               $path   Property path, for messages.
 	 *
-	 * @return string[] Problems found; empty when valid.
+	 * @return list<string> Problems found; empty when valid.
 	 */
 	public static function validate( mixed $value, array $schema, string $path = '' ): array {
 		$problems = array();
-		$type     = $schema['type'] ?? null;
+		$types    = self::types( $schema['type'] ?? null );
+		$type     = null;
 
-		if ( is_string( $type ) && ! self::is_type( $value, $type ) ) {
-			return array( self::label( $path ) . ' must be ' . self::article( $type ) . '.' );
+		// `type` may name one type or several (`["integer", "null"]`). The
+		// value must be one of them; the first it is decides which of the
+		// array and object rules apply.
+		if ( null !== $types ) {
+			foreach ( $types as $candidate ) {
+				if ( self::is_type( $value, $candidate ) ) {
+					$type = $candidate;
+					break;
+				}
+			}
+
+			if ( null === $type ) {
+				return array( self::label( $path ) . ' must be ' . implode( ' or ', array_map( self::article( ... ), $types ) ) . '.' );
+			}
 		}
 
 		if ( isset( $schema['enum'] ) && is_array( $schema['enum'] ) && ! in_array( $value, $schema['enum'], true ) ) {
 			$problems[] = self::label( $path ) . ' must be one of: '
-				. implode( ', ', array_map( static fn( $v ): string => is_scalar( $v ) ? (string) $v : '?', $schema['enum'] ) ) . '.';
+				. implode( ', ', array_map( static fn( mixed $v ): string => is_scalar( $v ) ? (string) $v : '?', $schema['enum'] ) ) . '.';
 		}
 
 		if ( is_string( $value ) ) {
@@ -106,6 +120,32 @@ final readonly class Schema {
 	}
 
 	/**
+	 * The type names a schema's `type` keyword allows.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @param mixed $type The keyword's value.
+	 *
+	 * @return list<string>|null Null when the schema names no type, so any
+	 *                           value passes the type check. A `type` that
+	 *                           is present but names nothing usable is a
+	 *                           list nothing matches, never "anything".
+	 */
+	private static function types( mixed $type ): ?array {
+		if ( null === $type ) {
+			return null;
+		}
+
+		if ( is_string( $type ) ) {
+			return array( $type );
+		}
+
+		$types = is_array( $type ) ? array_values( array_filter( $type, is_string( ... ) ) ) : array();
+
+		return array() === $types ? array( 'valid type' ) : $types;
+	}
+
+	/**
 	 * Object rules: required properties, per-property schemas, and
 	 * whether unknown keys are allowed.
 	 *
@@ -115,7 +155,7 @@ final readonly class Schema {
 	 * @param array<string, mixed> $schema Schema.
 	 * @param string               $path   Property path.
 	 *
-	 * @return string[]
+	 * @return list<string>
 	 */
 	private static function check_object( array $value, array $schema, string $path ): array {
 		$problems   = array();
@@ -129,7 +169,7 @@ final readonly class Schema {
 
 		foreach ( $properties as $name => $rules ) {
 			if ( is_array( $rules ) && array_key_exists( $name, $value ) ) {
-				$problems = array_merge( $problems, self::validate( $value[ $name ], $rules, self::join( $path, (string) $name ) ) );
+				$problems = array_merge( $problems, self::validate( $value[ $name ], self::schema( $rules ), self::join( $path, (string) $name ) ) );
 			}
 		}
 
@@ -153,11 +193,11 @@ final readonly class Schema {
 	 * @param array<string, mixed> $schema Schema.
 	 * @param string               $path   Property path.
 	 *
-	 * @return string[]
+	 * @return list<string>
 	 */
 	private static function check_string( string $value, array $schema, string $path ): array {
 		$problems = array();
-		$length   = mb_strlen( $value );
+		$length   = self::length( $value );
 
 		if ( is_int( $schema['minLength'] ?? null ) && $length < $schema['minLength'] ) {
 			$problems[] = self::label( $path ) . ' must be at least ' . $schema['minLength'] . ' characters.';
@@ -167,8 +207,10 @@ final readonly class Schema {
 			$problems[] = self::label( $path ) . ' must be at most ' . $schema['maxLength'] . ' characters.';
 		}
 
-		// Delimited and anchored here, so a schema author writes a bare
-		// pattern and cannot accidentally pass modifiers.
+		// Delimited here, so a schema author writes a bare pattern and cannot
+		// pass modifiers. Not anchored: as in JSON Schema, a pattern matches
+		// anywhere unless it says `^…$`. A pattern that fails to compile, or
+		// runs out of backtracking, fails the value rather than passing it.
 		if ( is_string( $schema['pattern'] ?? null ) && 1 !== @preg_match( '/' . str_replace( '/', '\/', $schema['pattern'] ) . '/u', $value ) ) {
 			$problems[] = self::label( $path ) . ' is not in the expected format.';
 		}
@@ -185,7 +227,7 @@ final readonly class Schema {
 	 * @param array<string, mixed> $schema Schema.
 	 * @param string               $path   Property path.
 	 *
-	 * @return string[]
+	 * @return list<string>
 	 */
 	private static function check_number( int|float $value, array $schema, string $path ): array {
 		$problems = array();
@@ -210,7 +252,7 @@ final readonly class Schema {
 	 * @param array<string, mixed> $schema Schema.
 	 * @param string               $path   Property path.
 	 *
-	 * @return string[]
+	 * @return list<string>
 	 */
 	private static function check_array( array $value, array $schema, string $path ): array {
 		$problems = array();
@@ -225,7 +267,7 @@ final readonly class Schema {
 
 		if ( is_array( $schema['items'] ?? null ) ) {
 			foreach ( array_values( $value ) as $index => $item ) {
-				$problems = array_merge( $problems, self::validate( $item, $schema['items'], self::join( $path, (string) $index ) ) );
+				$problems = array_merge( $problems, self::validate( $item, self::schema( $schema['items'] ), self::join( $path, (string) $index ) ) );
 			}
 		}
 
@@ -252,8 +294,44 @@ final readonly class Schema {
 			'array'   => is_array( $value ) && array_is_list( $value ),
 			'object'  => is_array( $value ) && ( array() === $value || ! array_is_list( $value ) ),
 			'null'    => null === $value,
-			default   => true,
+			// A name JSON Schema does not have is a mistake in the schema,
+			// and a mistake must not let every value through.
+			default   => false,
 		};
+	}
+
+	/**
+	 * A subschema, with its keys as the validator reads them.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @param array<mixed> $rules A decoded subschema.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function schema( array $rules ): array {
+		$schema = array();
+
+		foreach ( $rules as $key => $rule ) {
+			$schema[ (string) $key ] = $rule;
+		}
+
+		return $schema;
+	}
+
+	/**
+	 * Characters in a string, without mbstring.
+	 *
+	 * Every byte that is not a UTF-8 continuation byte starts a character.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @param string $value Text.
+	 *
+	 * @return int
+	 */
+	private static function length( string $value ): int {
+		return strlen( $value ) - (int) preg_match_all( '/[\x80-\xBF]/', $value );
 	}
 
 	/**

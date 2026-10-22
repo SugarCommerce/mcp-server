@@ -46,7 +46,7 @@ final class Server {
 	/**
 	 * Called after every tool invocation.
 	 *
-	 * @var callable|null
+	 * @var (callable(string, array<string, mixed>, Identity|null, bool): void)|null
 	 */
 	private mixed $auditor = null;
 
@@ -100,7 +100,8 @@ final class Server {
 	 *
 	 * @since 1.0.0
 	 *
-	 * @param callable $auditor fn(string $tool, array $arguments, ?Identity $identity, bool $ok): void
+	 * @param callable(string, array<string, mixed>, Identity|null, bool): void $auditor
+	 *        fn(string $tool, array $arguments, ?Identity $identity, bool $ok): void
 	 *
 	 * @return self
 	 */
@@ -137,7 +138,7 @@ final class Server {
 	 * @param array<string, mixed> $message  Decoded JSON-RPC message.
 	 * @param Identity|null        $identity The caller.
 	 *
-	 * @return string[] Empty when the message is not a `tools/call`, names
+	 * @return list<string> Empty when the message is not a `tools/call`, names
 	 *                  no registered tool, or the caller holds every scope.
 	 */
 	public function missing_scopes( array $message, ?Identity $identity ): array {
@@ -145,7 +146,8 @@ final class Server {
 			return array();
 		}
 
-		$name = $message['params']['name'] ?? null;
+		$params = $message['params'] ?? null;
+		$name   = is_array( $params ) ? $params['name'] ?? null : null;
 		$tool = is_string( $name ) ? $this->tools[ $name ] ?? null : null;
 
 		if ( null === $tool || $tool->permits( $identity ) ) {
@@ -440,8 +442,10 @@ final class Server {
 			return Response::error( $request->id, Protocol::INVALID_PARAMS, 'Unknown tool: ' . $name );
 		}
 
-		$arguments = $request->array( 'arguments' );
-		$problems  = Schema::validate( $arguments, $tool->input_schema );
+		// Validated as sent, so a list where an object belongs is refused
+		// rather than quietly emptied; handed on as the object's members.
+		$problems  = Schema::validate( $request->array( 'arguments' ), $tool->input_schema );
+		$arguments = $request->object( 'arguments' );
 
 		// An invalid argument is the model's mistake and the model can fix
 		// it, so it comes back as a tool execution error rather than a

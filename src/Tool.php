@@ -37,7 +37,13 @@ final readonly class Tool {
 	 *                                           use
 	 *                                           `['type'=>'object','additionalProperties'=>false]`
 	 *                                           for a tool with none.
-	 * @param callable             $handler      fn(array $arguments, mixed $identity): ToolResult
+	 * @param callable(array<string, mixed>, Identity|null): mixed $handler
+	 *                                           Runs the tool with the
+	 *                                           validated arguments and the
+	 *                                           caller, returning a
+	 *                                           ToolResult — or a string,
+	 *                                           number or Stringable, sent
+	 *                                           as text.
 	 * @param string               $title        Display name.
 	 * @param array<string, mixed> $output_schema Schema for structured output.
 	 * @param string[]             $scopes       Scopes required to see and call it.
@@ -82,6 +88,7 @@ final readonly class Tool {
 			throw new \InvalidArgumentException( 'The input schema for "' . $name . '" must be an object schema.' );
 		}
 
+		// @phpstan-ignore function.alreadyNarrowedType (a caller without static analysis can pass anything)
 		if ( ! is_callable( $handler ) ) {
 			throw new \InvalidArgumentException( 'The handler for "' . $name . '" is not callable.' );
 		}
@@ -159,10 +166,21 @@ final readonly class Tool {
 	 * @param Identity|null        $identity  Caller.
 	 *
 	 * @return ToolResult
+	 *
+	 * @throws \UnexpectedValueException When the handler returns something
+	 *                                   that is neither a result nor text.
 	 */
 	public function call( array $arguments, ?Identity $identity ): ToolResult {
 		$result = ( $this->handler )( $arguments, $identity );
 
-		return $result instanceof ToolResult ? $result : ToolResult::text( (string) $result );
+		if ( $result instanceof ToolResult ) {
+			return $result;
+		}
+
+		if ( is_string( $result ) || is_int( $result ) || is_float( $result ) || $result instanceof \Stringable ) {
+			return ToolResult::text( (string) $result );
+		}
+
+		throw new \UnexpectedValueException( 'The handler for "' . $this->name . '" returned ' . get_debug_type( $result ) . ', not a ToolResult.' );
 	}
 }

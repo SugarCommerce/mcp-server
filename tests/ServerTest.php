@@ -619,4 +619,50 @@ final class ServerTest extends TestCase {
 		$this->assertSame( array(), $server->missing_scopes( $this->message( 'tools/list' ), $reader ) );
 		$this->assertSame( array(), $server->missing_scopes( $this->message( 'tools/call', array( 'name' => 'destroy' ) ), new Identity( 'admin', array( '*' ) ) ) );
 	}
+
+	/* ─── Arguments and results ─────────────────────────────────────── */
+
+	public function test_arguments_that_are_not_an_object_are_refused(): void {
+		$response = $this->server()->handle(
+			$this->message( 'tools/call', array( 'name' => 'echo', 'arguments' => array( 'hello' ) ) ),
+			self::ADMIN
+		);
+
+		$this->assertTrue( $response->body['result']['isError'] );
+		$this->assertStringContainsString( 'must be an object', $response->body['result']['content'][0]['text'] );
+	}
+
+	/**
+	 * A handler that returns something other than a result or text is a
+	 * bug; it is answered as one failed call, not as "Array" with a warning.
+	 */
+	public function test_a_handler_returning_neither_a_result_nor_text_fails_generically(): void {
+		$server = new Server( new Implementation( 'test' ) );
+
+		$server->add( new Tool(
+			name: 'rows',
+			description: 'Returns rows by mistake.',
+			input_schema: array( 'type' => 'object' ),
+			handler: static fn(): array => array( array( 'password' => 'hunter2' ) ),
+		) );
+		$server->add( new Tool(
+			name: 'number',
+			description: 'Returns a number.',
+			input_schema: array( 'type' => 'object' ),
+			handler: static fn(): int => 42,
+		) );
+
+		$rows = $server->handle( $this->message( 'tools/call', array( 'name' => 'rows' ) ) );
+
+		$this->assertTrue( $rows->body['result']['isError'] );
+		$this->assertSame( 'The tool failed to run.', $rows->body['result']['content'][0]['text'] );
+		$this->assertSame( '42', $server->handle( $this->message( 'tools/call', array( 'name' => 'number' ) ) )->body['result']['content'][0]['text'] );
+	}
+
+	public function test_request_object_keeps_only_named_members(): void {
+		$request = Request::from_array( array( 'method' => 'tools/call', 'id' => 1, 'params' => array( 'arguments' => array( 'a' => 1, 7 => 2 ) ) ) );
+
+		$this->assertSame( array( 'a' => 1 ), $request->object( 'arguments' ) );
+		$this->assertSame( array(), $request->object( 'missing' ) );
+	}
 }

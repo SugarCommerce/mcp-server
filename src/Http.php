@@ -35,14 +35,46 @@ final readonly class Http {
 	private const int MAX_BODY = 1048576;
 
 	/**
-	 * @since 1.0.0
+	 * Most messages one batch may carry.
 	 *
-	 * @param Server $server Server to dispatch to.
-	 * @param string $realm  Named in the challenge on a 401. Since 1.1.0.
-	 * @param string $resource_metadata The RFC 9728 metadata URL for the
-	 *                          challenge, or ''. Since 1.2.0.
+	 * No revision this server speaks has batches (2025-06-18 removed them);
+	 * they are read for older clients' sake. Uncapped, one request inside
+	 * the body limit could be thousands of tool calls, each authenticated
+	 * and run, past any limit an application counts in requests.
+	 *
+	 * @since 1.4.0
 	 */
-	public function __construct( private Server $server, private string $realm = 'mcp', private string $resource_metadata = '' ) {}
+	public const int MAX_BATCH = 20;
+
+	/**
+	 * The message a request from a refused browser origin is answered with.
+	 *
+	 * @since 1.4.0
+	 */
+	public const string ORIGIN_REFUSED = 'Requests from that origin are not accepted.';
+
+	/**
+	 * @since 1.0.0
+	 * @since 1.4.0 `$origins`.
+	 *
+	 * @param Server       $server            Server to dispatch to.
+	 * @param string       $realm             Named in the challenge on a 401. Since 1.1.0.
+	 * @param string       $resource_metadata The RFC 9728 metadata URL for the
+	 *                                        challenge, or ''. Since 1.2.0.
+	 * @param list<string> $origins           Browser origins allowed to call,
+	 *                                        exactly as a browser sends them
+	 *                                        (`https://app.example.com`). A
+	 *                                        request with any other `Origin`
+	 *                                        header is refused with a 403; one
+	 *                                        without (every non-browser
+	 *                                        client) is not affected.
+	 */
+	public function __construct(
+		private Server $server,
+		private string $realm = 'mcp',
+		private string $resource_metadata = '',
+		private array $origins = array(),
+	) {}
 
 	/**
 	 * The headers a reply goes out with.
@@ -82,7 +114,8 @@ final readonly class Http {
 			$headers['WWW-Authenticate'] = self::challenge( $realm, $token_sent ? 'invalid_token' : '', $resource_metadata, $scope );
 		}
 
-		if ( 403 === $response->status ) {
+		// A refused browser origin is not a scope a token could gain.
+		if ( 403 === $response->status && self::ORIGIN_REFUSED !== $response->error_message() ) {
 			$headers['WWW-Authenticate'] = self::challenge( $realm, 'insufficient_scope', $resource_metadata, $scope );
 		}
 
@@ -147,16 +180,29 @@ final readonly class Http {
 	/**
 	 * Serve the current request and send the reply.
 	 *
+	 * Anything the authenticator or the auditor throws is answered
+	 * with a bare 500 and written to the error log, never to the client:
+	 * an exception's message can carry a DSN, a query or a path, and with
+	 * `display_errors` on PHP would print it into the reply.
+	 *
 	 * @since 1.0.0
+	 * @since 1.4.0 A thrown exception is a generic 500.
 	 *
 	 * @param array<string, mixed>|null $server_vars Overrides `$_SERVER`, for tests.
 	 * @param string|null               $body        Overrides the request body.
 	 *
 	 * @return void
 	 */
-	public function serve( ?array $server_vars = null, ?string $body = null ): void {
-		$server_vars = $server_vars ?? $_SERVER;
-		$response    = $this->respond( $server_vars, $body ?? $this->read_body() );
+	public function serve( #[\SensitiveParameter] ?array $server_vars = null, ?string $body = null ): void {
+		$server_vars = $server_vars ?? self::server_vars();
+
+		try {
+			$response = $this->respond( $server_vars, $body ?? $this->read_body() );
+		} catch ( \Throwable $e ) {
+			error_log( 'MCP request failed: ' . $e::class . ' in ' . $e->getFile() . ':' . $e->getLine() . ': ' . $e->getMessage() );
+
+			$response = Response::error( null, Protocol::INTERNAL_ERROR, 'Internal error.', null, 500 );
+		}
 
 		http_response_code( $response->status );
 
@@ -179,8 +225,21 @@ final readonly class Http {
 	 *
 	 * @return Response
 	 */
-	public function respond( array $server_vars, string $body ): Response {
-		$method = strtoupper( (string) ( $server_vars['REQUEST_METHOD'] ?? 'GET' ) );
+	public function respond( #[\SensitiveParameter] array $server_vars, string $body ): Response {
+		// Before anything else: a page in a browser, including one that has
+		// rebound its own hostname to this server's address, carries its
+		// Origin, and must not get as far as a tool (MCP, "Streamable HTTP:
+		// Security Warning").
+		// An empty header is read as none, as an application passing its
+		// own request's headers through tends to give one.
+		$origin = $server_vars['HTTP_ORIGIN'] ?? '';
+
+		if ( '' !== $origin && ! in_array( $origin, $this->origins, true ) ) {
+			return Response::error( null, Protocol::INVALID_REQUEST, self::ORIGIN_REFUSED, null, 403 );
+		}
+
+		$method = $server_vars['REQUEST_METHOD'] ?? 'GET';
+		$method = strtoupper( is_string( $method ) ? $method : 'GET' );
 
 		// Only POST carries a message. GET is reserved for the server-sent
 		// event stream, which this transport does not implement.
@@ -206,21 +265,33 @@ final readonly class Http {
 			return $this->batch( $decoded, $token, is_string( $header ) ? $header : null );
 		}
 
-		return $this->server->handle( $decoded, $token, is_string( $header ) ? $header : null );
+		return $this->server->handle( self::message( $decoded ), $token, is_string( $header ) ? $header : null );
 	}
 
 	/**
 	 * Handle a batch of messages.
 	 *
-	 * @since 1.0.0
+	 * An empty batch, and one over {@see self::MAX_BATCH}, are refused
+	 * whole (JSON-RPC 2.0 §6), before any message in it is handled.
 	 *
-	 * @param array<int, mixed> $messages Decoded messages.
-	 * @param string            $token    Bearer token.
-	 * @param string|null       $header   Protocol version header.
+	 * @since 1.0.0
+	 * @since 1.4.0 Empty and oversized batches are refused.
+	 *
+	 * @param list<mixed> $messages Decoded messages.
+	 * @param string      $token    Bearer token.
+	 * @param string|null $header   Protocol version header.
 	 *
 	 * @return Response
 	 */
 	private function batch( array $messages, #[\SensitiveParameter] string $token, ?string $header ): Response {
+		if ( array() === $messages ) {
+			return Response::error( null, Protocol::INVALID_REQUEST, 'The batch is empty.', null, 400 );
+		}
+
+		if ( count( $messages ) > self::MAX_BATCH ) {
+			return Response::error( null, Protocol::INVALID_REQUEST, 'A batch may carry at most ' . self::MAX_BATCH . ' messages.', null, 400 );
+		}
+
 		$replies = array();
 
 		foreach ( $messages as $message ) {
@@ -228,7 +299,7 @@ final readonly class Http {
 				continue;
 			}
 
-			$response = $this->server->handle( $message, $token, $header );
+			$response = $this->server->handle( self::message( $message ), $token, $header );
 
 			// Notifications produce no reply, and a batch of them produces
 			// no body at all.
@@ -245,6 +316,33 @@ final readonly class Http {
 	}
 
 	/**
+	 * A decoded message, keyed as {@see Server::handle()} reads it.
+	 *
+	 * JSON-RPC members are names, never numbers; anything PHP turned into
+	 * an integer key is not one of them.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @param array<mixed> $message Decoded JSON object.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function message( array $message ): array {
+		return array_filter( $message, is_string( ... ), ARRAY_FILTER_USE_KEY );
+	}
+
+	/**
+	 * The server variables, keyed by name.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function server_vars(): array {
+		return array_filter( $_SERVER, is_string( ... ), ARRAY_FILTER_USE_KEY );
+	}
+
+	/**
 	 * Extract the bearer token.
 	 *
 	 * @since 1.0.0
@@ -253,14 +351,16 @@ final readonly class Http {
 	 *
 	 * @return string Empty when absent.
 	 */
-	private function bearer( array $server_vars ): string {
-		$header = (string) (
-			$server_vars['HTTP_AUTHORIZATION']
+	private function bearer( #[\SensitiveParameter] array $server_vars ): string {
+		$header = $server_vars['HTTP_AUTHORIZATION']
 			// Apache with CGI hides Authorization unless it is passed
 			// through explicitly; this is the usual rewrite target.
 			?? $server_vars['REDIRECT_HTTP_AUTHORIZATION']
-			?? ''
-		);
+			?? '';
+
+		if ( ! is_string( $header ) ) {
+			return '';
+		}
 
 		if ( 1 === preg_match( '/^Bearer\s+(.+)$/i', trim( $header ), $matches ) ) {
 			return trim( $matches[1] );

@@ -359,6 +359,162 @@ final class HttpTest extends TestCase {
 		$this->assertSame( array(), $problems );
 	}
 
+	/**
+	 * `["integer", "null"]` is a JSON Schema type list. It used to be
+	 * skipped, so any value — a string, an array — reached a handler
+	 * written for an integer or nothing.
+	 */
+	public function test_a_list_of_types_is_enforced(): void {
+		$schema = array( 'type' => array( 'integer', 'null' ), 'minimum' => 1 );
+
+		$this->assertSame( array(), Schema::validate( 5, $schema ) );
+		$this->assertSame( array(), Schema::validate( null, $schema ) );
+		$this->assertSame( array( 'The value must be an integer or a null.' ), Schema::validate( 'abc', $schema ) );
+		$this->assertNotSame( array(), Schema::validate( array( 1 ), $schema ) );
+		$this->assertNotSame( array(), Schema::validate( 0, $schema ), 'The other rules still apply.' );
+
+		$nested = Schema::object( array( 'days' => array( 'type' => array( 'integer', 'null' ) ) ) );
+
+		$this->assertNotSame( array(), Schema::validate( array( 'days' => '30; DROP TABLE x' ), $nested ) );
+	}
+
+	/**
+	 * A type name JSON Schema does not have is a mistake in the schema; it
+	 * must not let everything through.
+	 */
+	public function test_an_unknown_type_name_fails_closed(): void {
+		$this->assertNotSame( array(), Schema::validate( 'x', array( 'type' => 'int' ) ) );
+		$this->assertNotSame( array(), Schema::validate( 1, array( 'type' => 'int' ) ) );
+		$this->assertNotSame( array(), Schema::validate( 1, array( 'type' => array() ) ) );
+		$this->assertNotSame( array(), Schema::validate( 1, array( 'type' => 7 ) ) );
+		$this->assertSame( array(), Schema::validate( 1, array() ), 'No type at all is still any type.' );
+	}
+
+	public function test_string_lengths_count_characters_not_bytes(): void {
+		$schema = array( 'type' => 'string', 'maxLength' => 3 );
+
+		$this->assertSame( array(), Schema::validate( 'été', $schema ) );
+		$this->assertNotSame( array(), Schema::validate( 'étés', $schema ) );
+	}
+
+	/* ─── Origin ────────────────────────────────────────────────────── */
+
+	/**
+	 * MCP Streamable HTTP: a server must check Origin, or a web page —
+	 * including one that has rebound its own hostname to 127.0.0.1 — can
+	 * POST tool calls to it. A text/plain POST needs no CORS preflight.
+	 */
+	public function test_a_browser_origin_is_refused_unless_allowed(): void {
+		$body     = $this->envelope( 'tools/list' );
+		$attacker = $this->post( $body, array( 'HTTP_ORIGIN' => 'http://attacker.example' ) );
+
+		$this->assertSame( 403, $attacker->status );
+		$this->assertSame( Http::ORIGIN_REFUSED, $attacker->error_message() );
+		$this->assertArrayNotHasKey( 'WWW-Authenticate', Http::headers( $attacker ), 'No token can lift an origin refusal.' );
+
+		$open = new Http( new Server( new Implementation( 'test' ) ) );
+
+		$this->assertSame( 403, $open->respond( array( 'REQUEST_METHOD' => 'POST', 'HTTP_ORIGIN' => 'null' ), $body )->status );
+
+		$allowed = new Http( new Server( new Implementation( 'test' ) ), origins: array( 'https://app.example' ) );
+
+		$this->assertSame( 200, $allowed->respond( array( 'REQUEST_METHOD' => 'POST', 'HTTP_ORIGIN' => 'https://app.example' ), $body )->status );
+		$this->assertSame( 403, $allowed->respond( array( 'REQUEST_METHOD' => 'POST', 'HTTP_ORIGIN' => 'https://app.example.evil' ), $body )->status );
+	}
+
+	public function test_a_request_without_an_origin_is_not_affected(): void {
+		$body = $this->envelope( 'tools/list' );
+
+		$this->assertSame( 200, $this->post( $body )->status );
+		$this->assertSame( 200, $this->post( $body, array( 'HTTP_ORIGIN' => '' ) )->status, 'An empty header is no header.' );
+	}
+
+	/* ─── Batch limits ──────────────────────────────────────────────── */
+
+	/**
+	 * One request inside the body limit could otherwise be thousands of
+	 * tool calls, past any rate limit counted in requests.
+	 */
+	public function test_an_oversized_batch_is_refused_before_anything_runs(): void {
+		$runs   = 0;
+		$server = new Server( new Implementation( 'test' ), new FakeAuthenticator() );
+
+		$server->add( new Tool(
+			name: 'count',
+			description: 'Count.',
+			input_schema: Schema::object( array() ),
+			handler: static function () use ( &$runs ): ToolResult {
+				++$runs;
+
+				return ToolResult::text( 'ok' );
+			},
+		) );
+
+		$http  = new Http( $server );
+		$calls = array_map(
+			fn( int $id ): string => $this->envelope( 'tools/call', array( 'name' => 'count', 'arguments' => array() ), $id ),
+			range( 1, Http::MAX_BATCH + 1 )
+		);
+
+		$refused = $http->respond( array( 'REQUEST_METHOD' => 'POST', 'HTTP_AUTHORIZATION' => 'Bearer admin-token' ), '[' . implode( ',', $calls ) . ']' );
+
+		$this->assertSame( 400, $refused->status );
+		$this->assertSame( 0, $runs );
+
+		$accepted = $http->respond( array( 'REQUEST_METHOD' => 'POST', 'HTTP_AUTHORIZATION' => 'Bearer admin-token' ), '[' . implode( ',', array_slice( $calls, 0, Http::MAX_BATCH ) ) . ']' );
+
+		$this->assertSame( 200, $accepted->status );
+		$this->assertSame( Http::MAX_BATCH, $runs );
+	}
+
+	public function test_an_empty_batch_is_an_invalid_request(): void {
+		$response = $this->post( '[]' );
+
+		$this->assertSame( 400, $response->status );
+		$this->assertSame( Protocol::INVALID_REQUEST, $response->body['error']['code'] );
+	}
+
+	/* ─── Failures ──────────────────────────────────────────────────── */
+
+	/**
+	 * An authenticator whose database is down throws, and the exception's
+	 * message names the database. serve() must answer without it.
+	 */
+	public function test_serve_answers_a_thrown_exception_with_a_bare_500(): void {
+		$server = new Server( new Implementation( 'test' ), new class() implements \SugarCommerce\Mcp\Authenticator {
+			public function authenticate( #[\SensitiveParameter] string $token ): ?\SugarCommerce\Mcp\Identity {
+				throw new \RuntimeException( 'SQLSTATE[HY000] [2002] mysql://root:hunter2@10.0.0.5/shop' );
+			}
+		} );
+
+		$log      = tempnam( sys_get_temp_dir(), 'mcp' );
+		$previous = ini_set( 'error_log', (string) $log );
+
+		ob_start();
+
+		try {
+			( new Http( $server ) )->serve( array( 'REQUEST_METHOD' => 'POST', 'HTTP_AUTHORIZATION' => 'Bearer x' ), $this->envelope( 'tools/list' ) );
+		} finally {
+			$output = (string) ob_get_clean();
+			ini_set( 'error_log', (string) $previous );
+		}
+
+		$logged = (string) file_get_contents( (string) $log );
+		unlink( (string) $log );
+
+		$this->assertStringNotContainsString( 'hunter2', $output );
+		$this->assertStringNotContainsString( 'mysql', $output );
+		$this->assertSame( Protocol::INTERNAL_ERROR, json_decode( $output, true )['error']['code'] );
+		$this->assertStringContainsString( 'RuntimeException', $logged, 'The operator still learns what happened.' );
+	}
+
+	public function test_invalid_utf8_in_a_reply_does_not_empty_it(): void {
+		$response = Response::result( 1, ToolResult::text( "caf\xE9" )->to_array() );
+
+		$this->assertNotSame( '', $response->json() );
+		$this->assertSame( "caf\u{FFFD}", json_decode( $response->json(), true )['result']['content'][0]['text'] );
+	}
+
 	/* ─── Live transport ────────────────────────────────────────────── */
 
 	/**

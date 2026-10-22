@@ -24,8 +24,9 @@ final readonly class Response {
 	/**
 	 * @since 1.0.0
 	 *
-	 * @param array<string, mixed>|null $body   Envelope, or null for no content.
-	 * @param int                       $status HTTP status.
+	 * @param array<string, mixed>|list<array<string, mixed>>|null $body
+	 *        Envelope; for a batch, the list of envelopes; null for no content.
+	 * @param int $status HTTP status.
 	 */
 	public function __construct(
 		public ?array $body,
@@ -135,6 +136,20 @@ final readonly class Response {
 	}
 
 	/**
+	 * The error's message, when this response is one error.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @return string|null Null for a result, a batch, or no content.
+	 */
+	public function error_message(): ?string {
+		$error   = $this->body['error'] ?? null;
+		$message = is_array( $error ) ? $error['message'] ?? null : null;
+
+		return is_string( $message ) ? $message : null;
+	}
+
+	/**
 	 * The envelope as JSON.
 	 *
 	 * @since 1.0.0
@@ -146,6 +161,9 @@ final readonly class Response {
 			return '';
 		}
 
-		return (string) json_encode( $this->body, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
+		// A tool's text can carry bytes that are not UTF-8 (a file name, a
+		// column read as binary). Substituted, they cost a character; left,
+		// they would make the whole reply an empty body.
+		return (string) json_encode( $this->body, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE );
 	}
 }

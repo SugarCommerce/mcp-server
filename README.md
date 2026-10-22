@@ -107,6 +107,22 @@ input_schema: Schema::object( [ 'id' => [ 'type' => 'integer' ] ], [ 'id' ] ),
 
 Closed by default (`additionalProperties: false`), so a misspelt argument is a retryable error naming it rather than silently ignored. Pass `open: true` to allow others.
 
+`type` may be one name or a list (`[ 'integer', 'null' ]`); the value must be one of them. A type name JSON Schema does not have (`'int'`) fails every value rather than passing it, so a typo shows up in the first test call.
+
+## Browsers and batches
+
+A request carrying an `Origin` header — any browser, including a page that has rebound its own hostname to your server's address — is refused with a 403 unless the origin is listed. Clients that are not browsers send none and are not affected:
+
+```php
+new Http( $server, origins: [ 'https://inspector.example.com' ] );
+```
+
+`respond()` reads `HTTP_ORIGIN` from the server variables you pass; an application passing its own selection should include it, or check the origin itself.
+
+No revision served has JSON-RPC batches; they are still read for older clients, up to `Http::MAX_BATCH` (20) messages. An empty or larger batch is refused whole, before anything in it runs.
+
+`serve()` answers anything an authenticator or auditor throws (a tool's own exception is already a generic failed call) with a bare 500 and writes the exception to the error log, never to the client.
+
 ## Sending the reply yourself
 
 `Http::serve()` writes the reply. An application with its own response object can build the reply with `respond()` and take the headers from `Http::headers()`, so the two cannot drift:
